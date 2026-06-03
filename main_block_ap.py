@@ -22,7 +22,7 @@ torch.backends.cudnn.benchmark = True
 @torch.no_grad()
 def evaluate(model, tokenizer, args, logger):
     '''
-    Note: evaluation simply move model to single GPU. 
+    Note: evaluation simply move model to single GPU.
     Therefor, to evaluate large model such as Llama-2-70B on single A100-80GB,
     please activate '--real_quant'.
     '''
@@ -31,6 +31,7 @@ def evaluate(model, tokenizer, args, logger):
     device_map = infer_auto_device_map(model, max_memory={i: args.max_memory for i in range(torch.cuda.device_count())}, no_split_module_classes=[block_class_name])
     model = dispatch_model(model, device_map=device_map)
     results = {}
+    ppl_results = {}
 
     if args.eval_ppl:
         datasets = ["wikitext2", "c4"]
@@ -56,7 +57,7 @@ def evaluate(model, tokenizer, args, logger):
         for task in task_list:
             total_acc += results['results'][task]['acc,none']
         logger.info(f'Average Acc: {total_acc/len(task_list)*100:.2f}%')
-    return results
+    return results, ppl_results
 
 
 def main():
@@ -94,6 +95,10 @@ def main():
     parser.add_argument("--max_memory", type=str, default="70GiB",help="The maximum memory of each GPU")
     parser.add_argument("--early_stop", type=int, default=0,help="early stoping after validation loss do not decrease")
     parser.add_argument("--off_load_to_disk", action="store_true", default=False, help="save training dataset to disk, saving CPU memory but may reduce training speed")
+    parser.add_argument("--wandb_project", type=str, default=None, help="wandb project name. If not set, wandb is disabled.")
+    parser.add_argument("--wandb_run_name", type=str, default=None, help="wandb run name. Auto-generated if not set.")
+    parser.add_argument("--wandb_run_id", type=str, default=None, help="wandb run ID to resume (passed by train.py)")
+    parser.add_argument("--scheme", type=str, default="baseline", help="Experiment scheme name for wandb tagging")
 
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
     args = parser.parse_args()
@@ -113,7 +118,10 @@ def main():
     output_dir = Path(args.output_dir)
     logger = utils.create_logger(output_dir)
     logger.info(args)
-    
+
+    from wandb_utils import init_wandb, finish_wandb
+    wandb_run = init_wandb(args, phase="block_ap", logger=logger)
+
     if args.net is None:
         args.net = args.model.split('/')[-1]
         logger.info(f"net is None, setting as {args.net}")
@@ -158,15 +166,30 @@ def main():
                 trainloader,
                 valloader,
                 logger,
+                wandb_run=wandb_run,
             )
             logger.info(time.time() - tick)
     torch.cuda.empty_cache()
     if args.save_quant_dir:
         logger.info("start saving model")
-        model.save_pretrained(args.save_quant_dir)  
-        tokenizer.save_pretrained(args.save_quant_dir) 
+        model.save_pretrained(args.save_quant_dir)
+        tokenizer.save_pretrained(args.save_quant_dir)
         logger.info("save model success")
-    evaluate(model, tokenizer, args,logger)
+    eval_results, ppl_results = evaluate(model, tokenizer, args, logger)
+
+    if wandb_run is not None:
+        for dataset_name, ppl_val in ppl_results.items():
+            wandb_run.summary[f"block_ap/final_ppl/{dataset_name}"] = ppl_val
+        if eval_results and 'results' in eval_results:
+            task_list = args.eval_tasks.split(',')
+            total_acc = 0
+            for task in task_list:
+                acc = eval_results['results'][task]['acc,none']
+                wandb_run.summary[f"block_ap/final_acc/{task}"] = acc
+                total_acc += acc
+            wandb_run.summary["block_ap/final_acc/average"] = total_acc / len(task_list)
+
+    finish_wandb(wandb_run)
 
 
 

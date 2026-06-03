@@ -36,6 +36,7 @@ def block_ap(
     trainloader,
     valloader,
     logger=None,
+    wandb_run=None,
 ):
     logger.info("Starting ...")
     if args.off_load_to_disk:
@@ -235,6 +236,16 @@ def block_ap(
                     norm = loss_scaler(loss, optimizer,parameters=trainable_parameters(qlayer)).cpu()
                     norm_list.append(norm.data)
 
+                    if wandb_run is not None:
+                        steps_per_epoch = args.train_size // args.batch_size
+                        global_step = (block_index * args.epochs + epoch) * steps_per_epoch + index
+                        wandb_run.log({
+                            "block_ap/reconstruction_loss": reconstruction_loss.item(),
+                            "block_ap/grad_norm": norm.item(),
+                            "block_ap/block_index": block_index,
+                            "block_ap/epoch": epoch,
+                        }, step=global_step)
+
                     # adjust lr
                     if args.quant_lr > 0:
                         quant_scheduler.step()
@@ -260,6 +271,24 @@ def block_ap(
                 val_loss_mean = torch.stack(val_loss_list).mean()
                 norm_mean = torch.stack(norm_list).mean()
                 logger.info(f"blocks {block_index} epoch {epoch} recon_loss:{loss_mean} val_loss:{val_loss_mean} quant_lr:{quant_scheduler.get_lr()[0]} norm:{norm_mean:.8f} max memory_allocated {torch.cuda.max_memory_allocated(dev) / 1024**2} time {time.time()-start_time} ")
+
+                if wandb_run is not None:
+                    steps_per_epoch = args.train_size // args.batch_size
+                    epoch_step = (block_index * args.epochs + epoch + 1) * steps_per_epoch
+                    epoch_metrics = {
+                        "block_ap/train_loss_mean": loss_mean.item(),
+                        "block_ap/val_loss_mean": val_loss_mean.item(),
+                        "block_ap/grad_norm_mean": norm_mean.item(),
+                        "block_ap/quant_lr": quant_scheduler.get_lr()[0] if args.quant_lr > 0 else 0,
+                        "block_ap/peak_vram_mb": torch.cuda.max_memory_allocated(dev) / 1024**2,
+                        "block_ap/epoch_time_s": time.time() - start_time,
+                        "block_ap/block_index": block_index,
+                        "block_ap/epoch": epoch,
+                    }
+                    if args.weight_lr > 0:
+                        epoch_metrics["block_ap/weight_lr"] = weight_scheduler.get_lr()[0]
+                    wandb_run.log(epoch_metrics, step=epoch_step)
+
                 if val_loss_mean < best_val_loss:
                     best_val_loss = val_loss_mean
                 else:

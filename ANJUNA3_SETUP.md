@@ -8,7 +8,13 @@ Machine specs: 16GB VRAM (RTX 4060 Ti), 128GB RAM
 uv venv --python 3.11
 source .venv/bin/activate
 uv pip install -r requirements.txt
-uv pip install huggingface_hub
+```
+
+## wandb Setup
+
+```bash
+cp .env.example .env
+# Edit .env and set your WANDB_API_KEY
 ```
 
 ## Download Llama-2-7B
@@ -19,7 +25,48 @@ huggingface-cli download meta-llama/Llama-2-7b-hf --local-dir ./models/Llama-2-7
 
 Requires Hugging Face account with Llama 2 access approved.
 
-## Training
+## Training (unified CLI)
+
+Run both phases with wandb logging:
+
+```bash
+python train.py \
+  --model ./models/Llama-2-7b-hf \
+  --net Llama-2 \
+  --wbits 4 \
+  --group_size 128 \
+  --scheme baseline \
+  --dataset redpajama \
+  --e2e_batch_size 1 \
+  --gradient_accumulation_steps 32
+```
+
+Run only Block-AP:
+
+```bash
+python train.py \
+  --model ./models/Llama-2-7b-hf \
+  --net Llama-2 \
+  --wbits 4 \
+  --group_size 128 \
+  --scheme baseline \
+  --phases block_ap
+```
+
+Run only E2E-QP (assumes Block-AP already completed):
+
+```bash
+python train.py \
+  --model ./models/Llama-2-7b-hf \
+  --net Llama-2 \
+  --wbits 4 \
+  --group_size 128 \
+  --scheme baseline \
+  --phases e2e_qp \
+  --dataset redpajama
+```
+
+## Manual phase commands (without unified CLI)
 
 ### Phase 1: Block-AP
 
@@ -35,7 +82,9 @@ CUDA_VISIBLE_DEVICES=0 python main_block_ap.py \
   --real_quant \
   --eval_ppl \
   --eval_tasks piqa,arc_easy,arc_challenge,hellaswag,winogrande \
-  --save_quant_dir ./output/block_ap_models/Llama-2-7b-w4g128
+  --save_quant_dir ./output/block_ap_models/Llama-2-7b-w4g128 \
+  --wandb_project qat \
+  --scheme baseline
 ```
 
 ### Phase 2: E2E-QP
@@ -68,10 +117,10 @@ CUDA_VISIBLE_DEVICES=0 python main_e2e_qp.py \
   --max_grad_norm 0.3 \
   --eval_tasks piqa,arc_easy,arc_challenge,hellaswag,winogrande \
   --preprocessing_num_workers 32 \
-  --do_ppl_eval
+  --do_ppl_eval \
+  --wandb_project qat \
+  --scheme baseline
 ```
-
-Batch size reduced to 1 (from default 4) and grad accumulation increased to 32 (from 8) to fit in 16GB VRAM while keeping the same effective batch size.
 
 ## Evaluate
 

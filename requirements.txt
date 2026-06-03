@@ -10,3 +10,5 @@ triton==2.2.0
 termcolor
 sentencepiece
 protobuf
+wandb
+python-dotenv

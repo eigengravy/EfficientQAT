@@ -173,6 +173,22 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         default='none',
         metadata={"help": "To use wandb or something else for reporting."}
     )
+    wandb_project: Optional[str] = field(
+        default=None,
+        metadata={"help": "wandb project name. If set, enables wandb logging."}
+    )
+    wandb_run_name: Optional[str] = field(
+        default=None,
+        metadata={"help": "wandb run name. Auto-generated if not set."}
+    )
+    wandb_run_id: Optional[str] = field(
+        default=None,
+        metadata={"help": "wandb run ID to resume (passed by train.py for single-run logging)."}
+    )
+    scheme: str = field(
+        default="baseline",
+        metadata={"help": "Experiment scheme name for wandb tagging."}
+    )
     output_dir: str = field(default='./output', metadata={"help": 'The output dir for logs and checkpoints'})
     resume_from_checkpoint: str = field(default=None, metadata={"help": 'The output dir for logs and checkpoints'})
     optim: str = field(default='paged_adamw_32bit', metadata={"help": 'The optimizer to be used'})
@@ -396,6 +412,19 @@ def train():
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     logger = utils.create_logger(args.output_dir)
     logger.info(args)
+
+    if args.wandb_project:
+        os.environ["WANDB_PROJECT"] = args.wandb_project
+        if training_args.report_to == 'none':
+            training_args.report_to = 'wandb'
+        if args.wandb_run_id:
+            os.environ["WANDB_RUN_ID"] = args.wandb_run_id
+            os.environ["WANDB_RESUME"] = "must"
+        if args.wandb_run_name:
+            training_args.run_name = args.wandb_run_name
+        else:
+            quant_config = f"w{args.wbits}g{args.group_size}"
+            training_args.run_name = f"{args.scheme}-{args.model_family}-{quant_config}-e2e_qp"
     
     checkpoint_dir, completed_training = get_last_checkpoint(args.output_dir)
     if completed_training:
@@ -433,7 +462,8 @@ def train():
             def on_evaluate(self, args=None, state=None, control=None, model=None, **kwargs):
                 results = test_ppl(trainer.model, trainer.tokenizer, datasets=['wikitext2','c4'],ppl_seqlen=2048)
                 logger.info(results)
-                trainer.log(results)
+                prefixed = {f"e2e_qp/ppl_{k}": v for k, v in results.items()}
+                trainer.log(prefixed)
 
         trainer.add_callback(PPLvalCallback)
     
@@ -514,6 +544,16 @@ def train():
             total_acc += results['results'][task]['acc,none']
         logger.info(f'Average Acc: {total_acc/len(task_list)*100:.2f}%')
 
+        if training_args.report_to == 'wandb':
+            try:
+                import wandb
+                if wandb.run is not None:
+                    for task in task_list:
+                        wandb.run.summary[f"e2e_qp/final_acc/{task}"] = results['results'][task]['acc,none']
+                    wandb.run.summary["e2e_qp/final_acc/average"] = total_acc / len(task_list)
+            except ImportError:
+                pass
+
     if args.do_mmlu_eval:
         lm_eval_model = HFLM(pretrained=model, batch_size=16)
         task_manager = lm_eval.tasks.TaskManager()
@@ -529,6 +569,16 @@ def train():
         for task in results['results']:
             total_acc += results['results'][task]['acc,none']
         logger.info(f"Average MMLU Acc: {total_acc/len(results['results'])*100:.2f}%")
+
+        if training_args.report_to == 'wandb':
+            try:
+                import wandb
+                if wandb.run is not None:
+                    for task in results['results']:
+                        wandb.run.summary[f"e2e_qp/final_mmlu/{task}"] = results['results'][task]['acc,none']
+                    wandb.run.summary["e2e_qp/final_mmlu/average"] = total_acc / len(results['results'])
+            except ImportError:
+                pass
 
 if __name__ == "__main__":
     train()
