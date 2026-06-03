@@ -98,7 +98,9 @@ def main():
     parser.add_argument("--wandb_project", type=str, default=None, help="wandb project name. If not set, wandb is disabled.")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="wandb run name. Auto-generated if not set.")
     parser.add_argument("--wandb_run_id", type=str, default=None, help="wandb run ID to resume (passed by train.py)")
-    parser.add_argument("--scheme", type=str, default="baseline", help="Experiment scheme name for wandb tagging")
+    parser.add_argument("--scheme", type=str, default="uniform_affine",
+                        choices=["uniform_affine", "ddcl_fixed"],
+                        help="Quantizer scheme: 'uniform_affine' (deterministic STE) or 'ddcl_fixed' (DDCL fixed-length dithered rounding)")
 
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
     args = parser.parse_args()

@@ -166,7 +166,7 @@ def block_ap(
         qlayer = copy.deepcopy(layer)
         for name, module in qlayer.named_modules():
             if isinstance(module,torch.nn.Linear):
-                quantlinear = int_linear_fake.QuantLinear(module, args.wbits, args.group_size)
+                quantlinear = int_linear_fake.QuantLinear(module, args.wbits, args.group_size, scheme=args.scheme)
                 set_op_by_name(qlayer, name, quantlinear)  
                 del module  
         qlayer.to(dev)
@@ -255,8 +255,9 @@ def block_ap(
                         optimizer.param_groups[weight_index]['lr'] = weight_scheduler.get_lr()[0]
 
                 # step 6.5: calculate validation loss
+                qlayer.eval()
                 val_loss_list = []
-                for index, (quant_inps,fp_inps) in enumerate(zip(quant_val_inps, fp_val_inps)):  
+                for index, (quant_inps,fp_inps) in enumerate(zip(quant_val_inps, fp_val_inps)):
                     # obtain output of quantization model
                     with torch.no_grad():
                         with torch.cuda.amp.autocast():
@@ -265,6 +266,7 @@ def block_ap(
                             quant_out = qlayer(input, attention_mask=attention_mask_batch,position_ids=position_ids)[0]
                             reconstruction_loss = loss_func(label, quant_out)
                     val_loss_list.append(reconstruction_loss.cpu())
+                qlayer.train()
                  
                 train_mean_num = min(len(loss_list),64) # calculate the average training loss of last train_mean_num samples
                 loss_mean = torch.stack(loss_list)[-(train_mean_num-1):].mean()
@@ -299,6 +301,7 @@ def block_ap(
             del optimizer
 
         # step 6.6: directly replace the weight with fake quantization
+        qlayer.eval()
         qlayer.half()
         quant_inplace(qlayer)
         set_quant_state(qlayer,weight_quant=False)  # weight has been quantized inplace

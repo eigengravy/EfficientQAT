@@ -9,7 +9,7 @@ Usage:
         --model ./models/Llama-2-7b-hf \
         --net Llama-2 \
         --wbits 4 --group_size 128 \
-        --scheme baseline \
+        --scheme uniform_affine \
         --phases block_ap,e2e_qp \
         --dataset redpajama
 """
@@ -53,7 +53,9 @@ def main():
     parser.add_argument("--learning_rate", type=float, default=1e-5, help="LR for E2E-QP")
 
     # Experiment
-    parser.add_argument("--scheme", type=str, default="baseline", help="Experiment scheme name")
+    parser.add_argument("--scheme", type=str, default="uniform_affine",
+                        choices=["uniform_affine", "ddcl_fixed"],
+                        help="Quantizer scheme: 'uniform_affine' (deterministic STE) or 'ddcl_fixed' (DDCL fixed-length dithered rounding)")
     parser.add_argument("--wandb_project", type=str, default="qat", help="wandb project name")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="wandb run name (auto-generated if not set)")
 

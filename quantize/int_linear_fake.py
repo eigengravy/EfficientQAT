@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from quantize.quantizer import UniformAffineQuantizer
+from quantize.quantizer import UniformAffineQuantizer, get_quantizer
 
 
 
@@ -16,7 +16,8 @@ class QuantLinear(nn.Module):
         self,
         org_module: nn.Linear,
         wbits=4,
-        group_size=64
+        group_size=64,
+        scheme="uniform",
     ):
         super().__init__()
         self.fwd_kwargs = dict()
@@ -31,7 +32,7 @@ class QuantLinear(nn.Module):
         # de-activate the quantized forward default
         self.use_weight_quant = False
         # initialize quantizer
-        self.weight_quantizer = UniformAffineQuantizer(wbits, group_size, weight=org_module.weight)
+        self.weight_quantizer = get_quantizer(scheme, wbits, group_size, weight=org_module.weight)
         self.use_temporary_parameter = False
 
     
