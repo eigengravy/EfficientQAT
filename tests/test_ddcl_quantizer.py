@@ -2,6 +2,7 @@
 import sys
 sys.path.insert(0, sys.path[0] + '/..')
 
+import pytest
 import torch
 from quantize.quantizer import (
     round_ste, round_dithered_ste,
@@ -92,10 +93,10 @@ def test_get_quantizer_factory():
     assert isinstance(q_ddcl, DDCLFixedLengthQuantizer)
 
 
-def test_get_quantizer_baseline_alias():
+def test_get_quantizer_unknown_scheme_raises():
     weight = torch.randn(64, 128)
-    q = get_quantizer("baseline", n_bits=4, group_size=128, weight=weight)
-    assert type(q) is UniformAffineQuantizer
+    with pytest.raises(ValueError, match="Unknown quantizer scheme"):
+        get_quantizer("baseline", n_bits=4, group_size=128, weight=weight)
 
 
 def test_ddcl_output_in_valid_range():

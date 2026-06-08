@@ -117,7 +117,7 @@ class DDCLFixedLengthQuantizer(UniformAffineQuantizer):
 
 
 def get_quantizer(scheme: str, n_bits=8, group_size=None, weight=None):
-    if scheme in ("uniform_affine", "baseline"):
+    if scheme == "uniform_affine":
         return UniformAffineQuantizer(n_bits, group_size, weight=weight)
     elif scheme == "ddcl_fixed":
         return DDCLFixedLengthQuantizer(n_bits, group_size, weight=weight)

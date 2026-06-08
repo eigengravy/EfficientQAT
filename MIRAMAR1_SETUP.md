@@ -1,6 +1,6 @@
-# EfficientQAT on anjuna3
+# EfficientQAT on miramar1
 
-Machine specs: 16GB VRAM (RTX 4060 Ti), 128GB RAM
+Machine specs: 24GB VRAM (A4500), 64GB RAM
 
 ## Setup
 
@@ -37,8 +37,8 @@ python train.py \
   --group_size 128 \
   --scheme uniform_affine \
   --dataset redpajama \
-  --e2e_batch_size 1 \
-  --gradient_accumulation_steps 32
+  --e2e_batch_size 2 \
+  --gradient_accumulation_steps 16
 ```
 
 Run only Block-AP:
@@ -101,9 +101,9 @@ CUDA_VISIBLE_DEVICES=0 python main_e2e_qp.py \
   --output_dir ./output/e2e_qp_models/Llama-2-7b-w4g128-redpajama \
   --do_train True \
   --pt_context_len 4096 \
-  --per_device_train_batch_size 1 \
-  --per_device_eval_batch_size 1 \
-  --gradient_accumulation_steps 32 \
+  --per_device_train_batch_size 2 \
+  --per_device_eval_batch_size 2 \
+  --gradient_accumulation_steps 16 \
   --logging_steps 1 \
   --save_strategy epoch \
   --training_strategy epochs \
@@ -116,7 +116,7 @@ CUDA_VISIBLE_DEVICES=0 python main_e2e_qp.py \
   --data_seed 42 \
   --max_grad_norm 0.3 \
   --eval_tasks piqa,arc_easy,arc_challenge,hellaswag,winogrande \
-  --preprocessing_num_workers 32 \
+  --preprocessing_num_workers 16 \
   --do_ppl_eval \
   --wandb_project qat \
   --scheme uniform_affine
@@ -150,16 +150,19 @@ CUDA_VISIBLE_DEVICES=0 python main_block_ap.py \
   --eval_tasks piqa,arc_easy,arc_challenge,hellaswag,winogrande
 ```
 
+## Recommended configs for 24GB VRAM
+
+The A450 with 24GB VRAM can handle larger batch sizes than the 16GB anjuna3 setup.
+
+| Config | wbits | group_size | batch_size | grad_accum | context_len | Notes |
+|--------|-------|------------|------------|------------|-------------|-------|
+| w4g128 | 4     | 128        | 2          | 16         | 4096        | Default, fits comfortably |
+| w3g128 | 3     | 128        | 2          | 16         | 4096        | Smaller model, more headroom |
+| w2g128 | 2     | 128        | 4          | 8          | 4096        | Smallest model, can push batch |
+| w2g64  | 2     | 64         | 2          | 16         | 4096        | More groups = more params |
+
 ## OOM troubleshooting
 
-- Reduce `--pt_context_len` to 2048 and set `--gradient_accumulation_steps 64`
-- For smaller quantized model (easier to fit): use `--wbits 2 --group_size 64` with `--weight_lr 2e-5` and `--learning_rate 2e-5`
-
-## Other quantization configs
-
-| Config | wbits | group_size | weight_lr / learning_rate | Model size |
-|--------|-------|------------|---------------------------|------------|
-| w4g128 | 4     | 128        | 1e-5                      | 3.7 GB     |
-| w3g128 | 3     | 128        | 1e-5                      | 3.1 GB     |
-| w2g128 | 2     | 128        | 2e-5                      | 2.2 GB     |
-| w2g64  | 2     | 64         | 2e-5                      | 2.3 GB     |
+With 24GB you have more headroom than anjuna3 but can still OOM on w4g128 if batch is too large:
+- Drop `--per_device_train_batch_size` to 1 and double `--gradient_accumulation_steps` to 32
+- Reduce `--pt_context_len` to 2048 as a last resort

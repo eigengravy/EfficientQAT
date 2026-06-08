@@ -186,8 +186,8 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         metadata={"help": "wandb run ID to resume (passed by train.py for single-run logging)."}
     )
     scheme: str = field(
-        default="baseline",
-        metadata={"help": "Experiment scheme name for wandb tagging."}
+        default="uniform_affine",
+        metadata={"help": "Quantizer scheme: 'uniform_affine' (deterministic STE) or 'ddcl_fixed' (DDCL dithered rounding)."}
     )
     output_dir: str = field(default='./output', metadata={"help": 'The output dir for logs and checkpoints'})
     resume_from_checkpoint: str = field(default=None, metadata={"help": 'The output dir for logs and checkpoints'})

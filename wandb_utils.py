@@ -22,7 +22,7 @@ def init_wandb(args, phase, logger=None):
             logger.info("--wandb_project not set, skipping wandb logging")
         return None
 
-    scheme = getattr(args, 'scheme', 'baseline')
+    scheme = getattr(args, 'scheme', 'uniform_affine')
     net = getattr(args, 'net', None) or getattr(args, 'model_family', 'model')
     wbits = getattr(args, 'wbits', 4)
     group_size = getattr(args, 'group_size', 128)
