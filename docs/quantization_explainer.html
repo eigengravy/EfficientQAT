@@ -1,0 +1,2336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EfficientQAT Quantization — Interactive Deep Dive</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface2: #242836;
+            --accent: #6c63ff;
+            --accent2: #00d4aa;
+            --accent3: #ff6b6b;
+            --text: #e4e4e7;
+            --text-dim: #9ca3af;
+            --border: #2d3348;
+            --code-bg: #1e2130;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+        .container { max-width: 1100px; margin: 0 auto; padding: 0 2rem; }
+
+        header {
+            padding: 4rem 0 3rem;
+            text-align: center;
+            border-bottom: 1px solid var(--border);
+        }
+        header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+        header p { color: var(--text-dim); font-size: 1.1rem; }
+
+        section {
+            padding: 3rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        h2 {
+            font-size: 1.8rem;
+            margin-bottom: 1.5rem;
+            color: var(--accent2);
+        }
+        h3 {
+            font-size: 1.3rem;
+            margin: 2rem 0 1rem;
+            color: var(--text);
+        }
+        p { margin-bottom: 1rem; color: var(--text-dim); }
+
+        .highlight { color: var(--accent); font-weight: 600; }
+        .highlight2 { color: var(--accent2); font-weight: 600; }
+        .highlight3 { color: var(--accent3); font-weight: 600; }
+
+        code {
+            background: var(--code-bg);
+            padding: 0.2em 0.5em;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.9em;
+        }
+        pre {
+            background: var(--code-bg);
+            padding: 1.5rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 1rem 0;
+            border: 1px solid var(--border);
+        }
+        pre code { background: none; padding: 0; }
+
+        .interactive-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            margin: 2rem 0;
+        }
+        .interactive-box h4 {
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+            color: var(--accent);
+        }
+
+        canvas {
+            display: block;
+            margin: 1rem auto;
+            border-radius: 8px;
+            background: var(--surface2);
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            margin: 1rem 0;
+            align-items: center;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+        }
+        .control-group label {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        input[type="range"] {
+            width: 180px;
+            accent-color: var(--accent);
+        }
+        .value-display {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            color: var(--accent2);
+        }
+
+        .comparison-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+        .comparison-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+        .comparison-card h4 {
+            margin-bottom: 0.8rem;
+            font-size: 1rem;
+        }
+        .comparison-card.active { border-color: var(--accent); }
+        .comparison-card ul {
+            list-style: none;
+            font-size: 0.9rem;
+        }
+        .comparison-card ul li {
+            padding: 0.3rem 0;
+            color: var(--text-dim);
+        }
+        .comparison-card ul li::before {
+            content: "→ ";
+            color: var(--accent2);
+        }
+
+        .flow-diagram {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--surface);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            overflow-x: auto;
+        }
+        .flow-box {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            padding: 0.6rem 1rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            white-space: nowrap;
+        }
+        .flow-box.learnable {
+            border-color: var(--accent);
+            box-shadow: 0 0 8px rgba(108, 99, 255, 0.3);
+        }
+        .flow-arrow { color: var(--text-dim); font-size: 1.2rem; }
+
+        .stats-row {
+            display: flex;
+            gap: 1rem;
+            margin: 1rem 0;
+            flex-wrap: wrap;
+        }
+        .stat-badge {
+            background: var(--surface2);
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            border: 1px solid var(--border);
+        }
+        .stat-badge .stat-label { color: var(--text-dim); }
+        .stat-badge .stat-value { color: var(--accent2); font-weight: 600; }
+
+        .tab-container { margin: 2rem 0; }
+        .tab-buttons {
+            display: flex;
+            gap: 0;
+            border-bottom: 2px solid var(--border);
+        }
+        .tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            padding: 0.8rem 1.5rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+            transition: all 0.2s;
+        }
+        .tab-btn.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+        .tab-content { display: none; padding: 1.5rem 0; }
+        .tab-content.active { display: block; }
+
+        .ste-demo {
+            display: flex;
+            gap: 2rem;
+            align-items: flex-start;
+        }
+        .ste-demo canvas { flex-shrink: 0; }
+
+        @media (max-width: 768px) {
+            .comparison-grid { grid-template-columns: 1fr; }
+            .ste-demo { flex-direction: column; }
+            header h1 { font-size: 1.8rem; }
+            .controls { flex-direction: column; }
+        }
+
+        .animation-container {
+            position: relative;
+            height: 200px;
+            margin: 2rem 0;
+            background: var(--surface);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+
+        .phase-timeline {
+            display: flex;
+            margin: 2rem 0;
+            position: relative;
+        }
+        .phase-block {
+            flex: 1;
+            padding: 1.5rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            position: relative;
+        }
+        .phase-block + .phase-block { margin-left: 2rem; }
+        .phase-block + .phase-block::before {
+            content: "→";
+            position: absolute;
+            left: -1.5rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--accent);
+            font-size: 1.5rem;
+        }
+        .phase-block h4 {
+            color: var(--accent);
+            margin-bottom: 0.5rem;
+        }
+        .phase-block p { font-size: 0.9rem; }
+
+        button.sim-btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.6rem 1.2rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: opacity 0.2s;
+        }
+        button.sim-btn:hover { opacity: 0.8; }
+
+        .legend {
+            display: flex;
+            gap: 1.5rem;
+            margin: 0.5rem 0;
+            font-size: 0.8rem;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="container">
+        <h1>EfficientQAT Quantization</h1>
+        <p>Interactive exploration of Uniform Affine Quantization with learned parameters</p>
+    </div>
+</header>
+
+<div class="container">
+
+<!-- Section 1: What Kind of Quantization? -->
+<section id="overview">
+    <h2>What Kind of Quantization Is This?</h2>
+    <p>
+        EfficientQAT implements <span class="highlight">Uniform Affine Scalar Quantization</span> —
+        each individual weight is mapped to the nearest point on a <em>learned uniform grid</em>.
+        This is fundamentally different from both Vector Quantization (VQ) and Finite Scalar Quantization (FSQ).
+    </p>
+
+    <div class="comparison-grid">
+        <div class="comparison-card">
+            <h4 style="color: var(--text-dim);">Vector Quantization (VQ)</h4>
+            <ul>
+                <li>Explicit codebook of K vectors</li>
+                <li>Nearest-neighbor lookup</li>
+                <li>One index per <em>group</em> of weights</li>
+                <li>Codebook collapse problem</li>
+                <li>Non-uniform spacing</li>
+            </ul>
+        </div>
+        <div class="comparison-card active">
+            <h4 style="color: var(--accent);">EfficientQAT (This Codebase)</h4>
+            <ul>
+                <li>Implicit grid via affine transform</li>
+                <li>Round to nearest integer</li>
+                <li>One integer per <em>individual</em> weight</li>
+                <li>No collapse possible</li>
+                <li>Uniform spacing (learned scale)</li>
+            </ul>
+        </div>
+        <div class="comparison-card">
+            <h4 style="color: var(--text-dim);">Finite Scalar Quantization (FSQ)</h4>
+            <ul>
+                <li>Fixed quantization levels</li>
+                <li>No learned parameters</li>
+                <li>One integer per scalar</li>
+                <li>No auxiliary loss needed</li>
+                <li>Levels are hyperparameters</li>
+            </ul>
+        </div>
+    </div>
+
+    <h3>The Core Formula</h3>
+    <div class="flow-diagram">
+        <div class="flow-box">W (FP16)</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-box learnable">÷ scale</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-box">round (STE)</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-box learnable">+ zero_point</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-box">clamp [0, 2ⁿ−1]</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-box learnable">− zero_point</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-box learnable">× scale</div>
+        <span class="flow-arrow">→</span>
+        <div class="flow-box">Ŵ (dequantized)</div>
+    </div>
+    <p style="font-size: 0.85rem; text-align: center;">
+        Boxes with <span style="color: var(--accent);">purple borders</span> contain or use <em>learnable</em> parameters.
+    </p>
+</section>
+
+<!-- Section 2: Interactive Quantization Grid -->
+<section id="grid-explorer">
+    <h2>Interactive: Quantization Grid Explorer</h2>
+    <p>
+        Adjust the scale and zero_point to see how the quantization grid maps to real-valued weights.
+        Each vertical line is a representable value after dequantization.
+    </p>
+
+    <div class="interactive-box">
+        <h4>Uniform Affine Grid Visualization</h4>
+        <div class="controls">
+            <div class="control-group">
+                <label>Bits (n)</label>
+                <input type="range" id="bits-slider" min="2" max="4" step="1" value="3">
+                <span class="value-display" id="bits-val">3</span>
+            </div>
+            <div class="control-group">
+                <label>Scale (s)</label>
+                <input type="range" id="scale-slider" min="0.01" max="0.5" step="0.01" value="0.15">
+                <span class="value-display" id="scale-val">0.15</span>
+            </div>
+            <div class="control-group">
+                <label>Zero Point (z)</label>
+                <input type="range" id="zp-slider" min="0" max="15" step="1" value="4">
+                <span class="value-display" id="zp-val">4</span>
+            </div>
+        </div>
+        <canvas id="grid-canvas" width="900" height="280"></canvas>
+        <div class="legend">
+            <div class="legend-item"><div class="legend-dot" style="background: #6c63ff;"></div> Quantization grid points</div>
+            <div class="legend-item"><div class="legend-dot" style="background: #ff6b6b;"></div> Original weights</div>
+            <div class="legend-item"><div class="legend-dot" style="background: #00d4aa;"></div> Quantized (snapped) weights</div>
+        </div>
+        <div class="stats-row" id="grid-stats"></div>
+    </div>
+</section>
+
+<!-- Section 3: STE Visualization -->
+<section id="ste-section">
+    <h2>Straight-Through Estimator (STE)</h2>
+    <p>
+        The rounding function <code>round(x)</code> has zero derivative almost everywhere (it's piecewise constant).
+        The STE <span class="highlight2">pretends the function is the identity during backpropagation</span>,
+        allowing gradients to flow through the quantization step.
+    </p>
+
+    <div class="interactive-box">
+        <h4>Forward vs. Backward Pass Through round_ste()</h4>
+        <div class="ste-demo">
+            <canvas id="ste-canvas" width="400" height="300"></canvas>
+            <div>
+                <h4 style="margin-top: 0;">Implementation</h4>
+                <pre><code>def round_ste(x):
+    # Forward: returns round(x)
+    # Backward: gradient = 1 (identity)
+    return (x.round() - x).detach() + x</code></pre>
+                <p style="font-size: 0.9rem; margin-top: 1rem;">
+                    <span class="highlight">The trick</span>: <code>(x.round() - x)</code> computes the rounding
+                    residual. <code>.detach()</code> stops gradients through it. Adding back <code>x</code> gives
+                    the rounded value in forward, but identity gradient in backward.
+                </p>
+                <div class="stats-row">
+                    <div class="stat-badge">
+                        <span class="stat-label">Forward: </span>
+                        <span class="stat-value">f(x) = round(x)</span>
+                    </div>
+                    <div class="stat-badge">
+                        <span class="stat-label">Backward: </span>
+                        <span class="stat-value">∂f/∂x ≈ 1</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Section 4: Training Pipeline -->
+<section id="training">
+    <h2>Two-Phase Training Pipeline</h2>
+
+    <div class="phase-timeline">
+        <div class="phase-block">
+            <h4>Phase 1: Block-AP</h4>
+            <p>Block-wise Alternating Parameters</p>
+            <ul style="list-style: none; font-size: 0.85rem; color: var(--text-dim); margin-top: 0.5rem;">
+                <li>• Train one block at a time</li>
+                <li>• Optimizes: W, scale, zero_point</li>
+                <li>• Loss: MSE vs. FP block output</li>
+                <li>• LR: 1e-4 (quant), 1e-5 (weight)</li>
+            </ul>
+        </div>
+        <div class="phase-block">
+            <h4>Phase 2: E2E-QP</h4>
+            <p>End-to-End Quantization Parameters</p>
+            <ul style="list-style: none; font-size: 0.85rem; color: var(--text-dim); margin-top: 0.5rem;">
+                <li>• Train entire model</li>
+                <li>• Optimizes: ONLY scale</li>
+                <li>• Loss: Cross-entropy (LM)</li>
+                <li>• LR: 1e-5 to 2e-5</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="interactive-box">
+        <h4>Block-AP Training Simulation</h4>
+        <p style="font-size: 0.9rem;">
+            Watch how the scale and zero_point adapt to minimize MSE between the full-precision and quantized block outputs.
+            Click "Train Step" to run one optimization step.
+        </p>
+        <div class="controls">
+            <button class="sim-btn" id="train-step-btn">Train Step</button>
+            <button class="sim-btn" id="train-reset-btn" style="background: var(--surface2); border: 1px solid var(--border);">Reset</button>
+            <button class="sim-btn" id="train-auto-btn" style="background: var(--accent2);">Auto-Train (20 steps)</button>
+        </div>
+        <canvas id="training-canvas" width="900" height="300"></canvas>
+        <div class="stats-row" id="training-stats"></div>
+    </div>
+</section>
+
+<!-- Section 5: Bit Packing -->
+<section id="bit-packing">
+    <h2>Bit Packing: From Integers to INT32</h2>
+    <p>
+        After quantization, integer values are packed into 32-bit words for memory-efficient storage.
+        For 4-bit quantization, 8 weights share one INT32. For 2-bit, 16 weights share one INT32.
+    </p>
+
+    <div class="interactive-box">
+        <h4>Interactive Bit Packing Visualizer</h4>
+        <div class="controls">
+            <div class="control-group">
+                <label>Bit width</label>
+                <select id="pack-bits-select" style="background: var(--surface2); color: var(--text); border: 1px solid var(--border); padding: 0.4rem; border-radius: 4px;">
+                    <option value="2">2-bit (16 per word)</option>
+                    <option value="3">3-bit (10 per word)</option>
+                    <option value="4" selected>4-bit (8 per word)</option>
+                    <option value="8">8-bit (4 per word)</option>
+                </select>
+            </div>
+            <button class="sim-btn" id="pack-randomize">Randomize Values</button>
+        </div>
+        <canvas id="packing-canvas" width="900" height="250"></canvas>
+    </div>
+</section>
+
+<!-- Section 6: Group-wise Quantization -->
+<section id="groupwise">
+    <h2>Group-wise Quantization</h2>
+    <p>
+        Rather than using a single (scale, zero_point) pair for an entire weight matrix, EfficientQAT divides weights
+        into <span class="highlight">groups</span> (typically 64 or 128 consecutive values). Each group gets its own
+        learned parameters, allowing the grid to adapt to local weight distributions.
+    </p>
+
+    <div class="interactive-box">
+        <h4>Group-wise vs. Per-tensor Quantization</h4>
+        <div class="controls">
+            <div class="control-group">
+                <label>Group Size</label>
+                <input type="range" id="group-size-slider" min="8" max="128" step="8" value="32">
+                <span class="value-display" id="group-size-val">32</span>
+            </div>
+            <div class="control-group">
+                <label>Bits</label>
+                <input type="range" id="group-bits-slider" min="2" max="4" step="1" value="4">
+                <span class="value-display" id="group-bits-val">4</span>
+            </div>
+            <button class="sim-btn" id="group-regenerate">Regenerate Weights</button>
+        </div>
+        <canvas id="group-canvas" width="900" height="350"></canvas>
+        <div class="stats-row" id="group-stats"></div>
+    </div>
+</section>
+
+<!-- Section 7: Quantization Error Landscape -->
+<section id="error-landscape">
+    <h2>Scale Optimization Landscape</h2>
+    <p>
+        The MSE between original and quantized weights forms a non-trivial loss surface as a function of scale.
+        The E2E-QP phase fine-tunes scales using gradient descent on this landscape.
+    </p>
+
+    <div class="interactive-box">
+        <h4>MSE vs. Scale — Finding the Optimal Grid Spacing</h4>
+        <canvas id="landscape-canvas" width="900" height="300"></canvas>
+        <div class="controls">
+            <div class="control-group">
+                <label>Weight Distribution</label>
+                <select id="dist-select" style="background: var(--surface2); color: var(--text); border: 1px solid var(--border); padding: 0.4rem; border-radius: 4px;">
+                    <option value="gaussian">Gaussian</option>
+                    <option value="laplace">Laplacian</option>
+                    <option value="uniform">Uniform</option>
+                    <option value="bimodal">Bimodal</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label>Bits</label>
+                <input type="range" id="landscape-bits" min="2" max="4" step="1" value="4">
+                <span class="value-display" id="landscape-bits-val">4</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Section 8: Full Pipeline Animation -->
+<section id="full-pipeline">
+    <h2>Full Pipeline: Weight → Packed Integer</h2>
+    <p>
+        Follow a single weight value through the complete quantization pipeline.
+    </p>
+
+    <div class="interactive-box">
+        <h4>End-to-End Weight Transformation</h4>
+        <div class="controls">
+            <div class="control-group">
+                <label>Input Weight Value</label>
+                <input type="range" id="pipeline-weight" min="-2" max="2" step="0.01" value="0.73">
+                <span class="value-display" id="pipeline-weight-val">0.73</span>
+            </div>
+        </div>
+        <div id="pipeline-steps" style="margin-top: 1.5rem;"></div>
+    </div>
+</section>
+
+<!-- Section 9: Memory Savings -->
+<section id="memory">
+    <h2>Compression & Memory Savings</h2>
+
+    <div class="interactive-box">
+        <h4>Llama-2-7B Memory Comparison</h4>
+        <canvas id="memory-canvas" width="900" height="200"></canvas>
+    </div>
+
+    <h3>Storage Breakdown (Real Quantization)</h3>
+    <pre><code>Per linear layer (out_features × in_features):
+┌─────────────────────────────────────────────────────────┐
+│ qweight: (in / (32/bits)) × out × 4 bytes (INT32)      │
+│ scales:  (in / group_size) × out × 2 bytes (FP16)      │  ← trainable in E2E-QP
+│ qzeros:  (in / group_size) × (out / (32/bits)) × 4B    │
+└─────────────────────────────────────────────────────────┘
+
+Example: 4096×4096 layer, 4-bit, group_size=128:
+  qweight: (4096/8) × 4096 × 4 = 8 MB
+  scales:  (4096/128) × 4096 × 2 = 0.25 MB
+  qzeros:  (4096/128) × (4096/8) × 4 = 0.5 MB
+  Total: 8.75 MB  (vs 32 MB in FP16 → 3.66× compression)</code></pre>
+</section>
+
+</div>
+
+<!-- Section 10: Paper Results & Ablations -->
+<section id="results">
+    <h2>Paper Results & Ablation Studies</h2>
+    <p>
+        Key experimental findings from the EfficientQAT paper (arXiv:2407.11062, ACL 2025).
+    </p>
+
+    <h3>Ablation: What to Train in Block-AP?</h3>
+    <div class="interactive-box">
+        <h4>Trainable Parameter Variants — Impact on Quality</h4>
+        <p style="font-size: 0.9rem; margin-bottom: 1rem;">
+            The paper's key finding: training <em>all</em> parameters (W + s + z) per block outperforms all partial schemes,
+            with minimal additional memory cost since s and z are tiny relative to W.
+        </p>
+        <canvas id="ablation-canvas" width="900" height="250"></canvas>
+    </div>
+
+    <h3>Phase Effectiveness</h3>
+    <div class="interactive-box">
+        <h4>Block-AP vs E2E-QP — Contribution Analysis (Llama-2-7B, W2g64)</h4>
+        <canvas id="phase-ablation-canvas" width="900" height="220"></canvas>
+        <p style="font-size: 0.85rem; margin-top: 1rem; color: var(--text-dim);">
+            Block-AP contributes ~85% of the quality improvement (PPL: 453 → 8.5). E2E-QP provides the final refinement (8.5 → 7.7).
+            Neither alone matches their combination.
+        </p>
+    </div>
+
+    <h3>Comparison with Prior Art</h3>
+    <div class="interactive-box">
+        <h4>Perplexity Comparison — Llama-2-7B, WikiText-2</h4>
+        <div class="controls">
+            <div class="control-group">
+                <label>Bit width</label>
+                <select id="compare-bits" style="background: var(--surface2); color: var(--text); border: 1px solid var(--border); padding: 0.4rem; border-radius: 4px;">
+                    <option value="2">2-bit (W2g64)</option>
+                    <option value="3">3-bit (W3g128)</option>
+                    <option value="4" selected>4-bit (W4g128)</option>
+                </select>
+            </div>
+        </div>
+        <canvas id="compare-canvas" width="900" height="280"></canvas>
+    </div>
+
+    <h3>Gradient Flow Through the Quantizer (from Paper)</h3>
+    <div class="interactive-box">
+        <h4>STE Gradient Regions — How Gradients Flow to Scale, Zero Point, and Weights</h4>
+        <canvas id="gradient-canvas" width="900" height="300"></canvas>
+        <div class="legend" style="margin-top: 1rem;">
+            <div class="legend-item"><div class="legend-dot" style="background: #00d4aa;"></div> Gradients flow (within valid range)</div>
+            <div class="legend-item"><div class="legend-dot" style="background: #ff6b6b;"></div> Clipped region (special gradients)</div>
+            <div class="legend-item"><div class="legend-dot" style="background: #6c63ff;"></div> Quantization grid levels</div>
+        </div>
+    </div>
+
+    <h3>Training Efficiency</h3>
+    <div class="interactive-box">
+        <h4>Training Time & Memory — Single A100-80GB</h4>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 1rem;">
+            <div>
+                <h4 style="color: var(--accent); font-size: 0.9rem; margin-bottom: 0.5rem;">Training Time</h4>
+                <canvas id="time-canvas" width="400" height="180"></canvas>
+            </div>
+            <div>
+                <h4 style="color: var(--accent); font-size: 0.9rem; margin-bottom: 0.5rem;">GPU Memory (Block-AP)</h4>
+                <canvas id="mem-train-canvas" width="400" height="180"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <h3>Calibration Data Sensitivity</h3>
+    <div class="interactive-box">
+        <h4>Impact of Calibration Sample Count on Quality</h4>
+        <canvas id="calib-canvas" width="900" height="220"></canvas>
+        <p style="font-size: 0.85rem; margin-top: 0.5rem; color: var(--text-dim);">
+            4096 samples is the sweet spot — the train/val loss gap drops to 0.06 (virtually no overfitting),
+            while further increases (8192) provide diminishing returns (+0.06% accuracy).
+        </p>
+    </div>
+</section>
+
+<!-- Section 11: Algorithm Pseudocode -->
+<section id="algorithm">
+    <h2>Algorithm: Complete Pipeline</h2>
+
+    <div class="interactive-box">
+        <h4>Block-AP Algorithm (Phase 1)</h4>
+        <pre><code>Input: Full-precision model M, calibration data D, bits N, group_size g
+Output: Quantized model M_q
+
+1. Capture inputs to first transformer block using D
+2. For each block i = 0, 1, ..., L-1:
+   a. Clone block → Q_block (with QuantLinear layers)
+   b. Compute FP output: Y_fp = Block_fp(X)
+   c. Enable fake quantization on Q_block
+   d. Initialize per-group (s, z) via Max-Min:
+      s = (max(group) - min(group)) / (2^N - 1)
+      z = round(-min(group) / s)
+   e. For epoch = 1, ..., E:
+      For each batch x in D:
+        Y_q = Q_block(x)          // forward with STE
+        loss = MSE(Y_fp, Y_q)     // reconstruction loss
+        ∇s, ∇z, ∇W = backprop(loss)  // via STE
+        s ← s - lr_q · ∇s        // update quantization params
+        z ← z - lr_q · ∇z
+        W ← W - lr_w · ∇W        // update weights
+   f. Apply quantization in-place: W ← fake_quant(W)
+   g. Pack into INT format (optional)
+   h. Update block inputs: X ← Q_block(X)
+3. Return quantized model M_q</code></pre>
+    </div>
+
+    <div class="interactive-box" style="margin-top: 1.5rem;">
+        <h4>E2E-QP Algorithm (Phase 2)</h4>
+        <pre><code>Input: Quantized model M_q from Block-AP, training data D
+Output: Fine-tuned model M_q*
+
+1. Load M_q (bit-packed weights, FP16 scales)
+2. Dequantize: W_float = (W_int - z) · s  // for each layer
+3. Freeze all parameters except scales
+4. For each batch (x, y) in D:
+   logits = M_q(x)                // full forward pass
+   loss = CrossEntropy(logits, y) // language modeling loss
+   ∇s = backprop(loss)            // simplified: ∂Ŵ/∂s = W_q - z
+   s ← s - lr · ∇s               // update scales only
+5. Return fine-tuned M_q*
+
+Key insight: ∂Ŵ/∂s = W_int - z (no rounding noise)
+This clean gradient allows stable end-to-end optimization.</code></pre>
+    </div>
+
+    <h3>Effective Bits Per Parameter</h3>
+    <div class="interactive-box">
+        <h4>Storage Overhead Calculator</h4>
+        <div class="controls">
+            <div class="control-group">
+                <label>Weight bits (N)</label>
+                <input type="range" id="eff-bits" min="2" max="8" step="1" value="4">
+                <span class="value-display" id="eff-bits-val">4</span>
+            </div>
+            <div class="control-group">
+                <label>Group size (g)</label>
+                <input type="range" id="eff-group" min="32" max="256" step="32" value="128">
+                <span class="value-display" id="eff-group-val">128</span>
+            </div>
+        </div>
+        <div id="eff-result" style="margin-top: 1rem;"></div>
+    </div>
+</section>
+
+<footer style="padding: 3rem 0; text-align: center; color: var(--text-dim); font-size: 0.85rem; border-top: 1px solid var(--border);">
+    <div class="container">
+        <p>EfficientQAT — Efficient Quantization-Aware Training for Large Language Models</p>
+        <p style="margin-top: 0.3rem;">Paper: arXiv:2407.11062 | ACL 2025 Main Conference</p>
+        <p style="margin-top: 0.3rem;">Chen, Mengzhao et al. (OpenGVLab, Shanghai AI Lab)</p>
+    </div>
+</footer>
+
+<script>
+// === GRID EXPLORER ===
+(function() {
+    const canvas = document.getElementById('grid-canvas');
+    const ctx = canvas.getContext('2d');
+    const bitsSlider = document.getElementById('bits-slider');
+    const scaleSlider = document.getElementById('scale-slider');
+    const zpSlider = document.getElementById('zp-slider');
+    const bitsVal = document.getElementById('bits-val');
+    const scaleVal = document.getElementById('scale-val');
+    const zpVal = document.getElementById('zp-val');
+    const statsDiv = document.getElementById('grid-stats');
+
+    // Generate some sample weights
+    let sampleWeights = [];
+    function generateWeights() {
+        sampleWeights = [];
+        for (let i = 0; i < 20; i++) {
+            sampleWeights.push((Math.random() - 0.5) * 1.5);
+        }
+    }
+    generateWeights();
+
+    function draw() {
+        const bits = parseInt(bitsSlider.value);
+        const scale = parseFloat(scaleSlider.value);
+        const zp = parseInt(zpSlider.value);
+        const levels = Math.pow(2, bits);
+        const qmax = levels - 1;
+
+        // Update zero point slider max
+        zpSlider.max = qmax;
+        if (zp > qmax) zpSlider.value = qmax;
+
+        bitsVal.textContent = bits;
+        scaleVal.textContent = scale.toFixed(2);
+        zpVal.textContent = zp;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const padding = 60;
+        const w = canvas.width - 2 * padding;
+        const h = canvas.height;
+
+        // Calculate grid range in real values
+        const minVal = (0 - zp) * scale;
+        const maxVal = (qmax - zp) * scale;
+        const rangeVal = maxVal - minVal;
+        const displayMin = minVal - rangeVal * 0.1;
+        const displayMax = maxVal + rangeVal * 0.1;
+        const displayRange = displayMax - displayMin;
+
+        function valToX(v) {
+            return padding + ((v - displayMin) / displayRange) * w;
+        }
+
+        // Draw axis
+        const axisY = h * 0.5;
+        ctx.strokeStyle = '#3d4560';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padding, axisY);
+        ctx.lineTo(padding + w, axisY);
+        ctx.stroke();
+
+        // Draw grid points
+        ctx.strokeStyle = '#6c63ff';
+        ctx.lineWidth = 2;
+        for (let q = 0; q <= qmax; q++) {
+            const realVal = (q - zp) * scale;
+            const x = valToX(realVal);
+            ctx.beginPath();
+            ctx.moveTo(x, axisY - 40);
+            ctx.lineTo(x, axisY + 40);
+            ctx.stroke();
+
+            // Label
+            ctx.fillStyle = '#6c63ff';
+            ctx.font = '10px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(q.toString(), x, axisY + 55);
+            ctx.fillStyle = '#9ca3af';
+            ctx.fillText(realVal.toFixed(2), x, axisY - 48);
+        }
+
+        // Draw zero marker
+        const zeroX = valToX(0);
+        ctx.strokeStyle = '#ffffff44';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(zeroX, axisY - 60);
+        ctx.lineTo(zeroX, axisY + 60);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ffffff88';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('0', zeroX, axisY - 65);
+
+        // Draw sample weights and their quantized versions
+        let totalError = 0;
+        sampleWeights.forEach((w_orig, i) => {
+            // Quantize
+            let q_int = Math.round(w_orig / scale) + zp;
+            q_int = Math.max(0, Math.min(qmax, q_int));
+            const w_quant = (q_int - zp) * scale;
+            const error = Math.abs(w_orig - w_quant);
+            totalError += error * error;
+
+            const y = axisY - 80 - (i % 3) * 25;
+            const origX = valToX(w_orig);
+            const quantX = valToX(w_quant);
+
+            // Draw original weight
+            ctx.fillStyle = '#ff6b6b';
+            ctx.beginPath();
+            ctx.arc(origX, y, 4, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Draw arrow to quantized position
+            if (Math.abs(origX - quantX) > 2) {
+                ctx.strokeStyle = '#ffffff33';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(origX, y);
+                ctx.lineTo(quantX, y);
+                ctx.stroke();
+            }
+
+            // Draw quantized position
+            ctx.fillStyle = '#00d4aa';
+            ctx.beginPath();
+            ctx.arc(quantX, y, 4, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        const mse = totalError / sampleWeights.length;
+        statsDiv.innerHTML = `
+            <div class="stat-badge"><span class="stat-label">Levels: </span><span class="stat-value">${levels}</span></div>
+            <div class="stat-badge"><span class="stat-label">Grid spacing: </span><span class="stat-value">${scale.toFixed(3)}</span></div>
+            <div class="stat-badge"><span class="stat-label">Range: </span><span class="stat-value">[${minVal.toFixed(2)}, ${maxVal.toFixed(2)}]</span></div>
+            <div class="stat-badge"><span class="stat-label">MSE: </span><span class="stat-value">${mse.toFixed(5)}</span></div>
+        `;
+    }
+
+    bitsSlider.addEventListener('input', draw);
+    scaleSlider.addEventListener('input', draw);
+    zpSlider.addEventListener('input', draw);
+    draw();
+})();
+
+// === STE VISUALIZATION ===
+(function() {
+    const canvas = document.getElementById('ste-canvas');
+    const ctx = canvas.getContext('2d');
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const w = canvas.width;
+        const h = canvas.height;
+        const padding = 40;
+
+        // Axis
+        ctx.strokeStyle = '#3d4560';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padding, h - padding);
+        ctx.lineTo(w - padding, h - padding);
+        ctx.moveTo(padding, h - padding);
+        ctx.lineTo(padding, padding);
+        ctx.stroke();
+
+        // Labels
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('input x', w / 2, h - 10);
+        ctx.save();
+        ctx.translate(12, h / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText('output', 0, 0);
+        ctx.restore();
+
+        const plotW = w - 2 * padding;
+        const plotH = h - 2 * padding;
+        const xMin = -0.5, xMax = 3.5;
+        const yMin = -0.5, yMax = 3.5;
+
+        function toCanvasX(x) { return padding + ((x - xMin) / (xMax - xMin)) * plotW; }
+        function toCanvasY(y) { return h - padding - ((y - yMin) / (yMax - yMin)) * plotH; }
+
+        // Draw round(x) — staircase
+        ctx.strokeStyle = '#ff6b6b';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let i = 0; i <= 3; i++) {
+            ctx.moveTo(toCanvasX(i - 0.5), toCanvasY(i));
+            ctx.lineTo(toCanvasX(i + 0.5), toCanvasY(i));
+        }
+        ctx.stroke();
+
+        // Draw identity (STE backward)
+        ctx.strokeStyle = '#00d4aa';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(toCanvasX(xMin), toCanvasY(xMin));
+        ctx.lineTo(toCanvasX(xMax), toCanvasY(xMax));
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Legend
+        ctx.fillStyle = '#ff6b6b';
+        ctx.fillRect(padding + 10, padding + 10, 15, 3);
+        ctx.fillStyle = '#ff6b6b';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('Forward: round(x)', padding + 30, padding + 14);
+
+        ctx.fillStyle = '#00d4aa';
+        ctx.fillRect(padding + 10, padding + 28, 15, 3);
+        ctx.fillStyle = '#00d4aa';
+        ctx.fillText('Backward: identity (STE)', padding + 30, padding + 32);
+
+        // Tick marks
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'center';
+        for (let i = 0; i <= 3; i++) {
+            ctx.fillText(i.toString(), toCanvasX(i), h - padding + 15);
+            ctx.fillText(i.toString(), padding - 15, toCanvasY(i) + 4);
+        }
+    }
+    draw();
+})();
+
+// === TRAINING SIMULATION ===
+(function() {
+    const canvas = document.getElementById('training-canvas');
+    const ctx = canvas.getContext('2d');
+    const statsDiv = document.getElementById('training-stats');
+    const stepBtn = document.getElementById('train-step-btn');
+    const resetBtn = document.getElementById('train-reset-btn');
+    const autoBtn = document.getElementById('train-auto-btn');
+
+    let weights = [];
+    let scale, zeroPoint, step;
+    const bits = 4;
+    const qmax = 15;
+    const lr_scale = 0.002;
+    const lr_zp = 0.5;
+    let lossHistory = [];
+
+    function init() {
+        weights = [];
+        for (let i = 0; i < 64; i++) {
+            weights.push((Math.random() - 0.3) * 2.0);
+        }
+        const wmin = Math.min(...weights);
+        const wmax = Math.max(...weights);
+        // Intentionally bad initialization to show optimization
+        scale = (wmax - wmin) / qmax * 2.5;
+        zeroPoint = Math.round(-wmin / scale) + 3;
+        step = 0;
+        lossHistory = [];
+        draw();
+    }
+
+    function quantize(w) {
+        let q = Math.round(w / scale) + zeroPoint;
+        q = Math.max(0, Math.min(qmax, q));
+        return (q - zeroPoint) * scale;
+    }
+
+    function computeMSE() {
+        let mse = 0;
+        weights.forEach(w => {
+            const wq = quantize(w);
+            mse += (w - wq) ** 2;
+        });
+        return mse / weights.length;
+    }
+
+    function trainStep() {
+        // Compute gradient of MSE w.r.t. scale and zero_point (numerical)
+        const eps = 1e-5;
+        const loss0 = computeMSE();
+
+        const origScale = scale;
+        scale = origScale + eps;
+        const loss_s = computeMSE();
+        scale = origScale;
+        const grad_s = (loss_s - loss0) / eps;
+
+        const origZP = zeroPoint;
+        zeroPoint = origZP + eps;
+        const loss_z = computeMSE();
+        zeroPoint = origZP;
+        const grad_z = (loss_z - loss0) / eps;
+
+        // Gradient descent
+        scale -= lr_scale * grad_s;
+        scale = Math.max(0.001, scale);
+        zeroPoint -= lr_zp * grad_z;
+        zeroPoint = Math.max(0, Math.min(qmax, Math.round(zeroPoint)));
+
+        step++;
+        lossHistory.push(loss0);
+        draw();
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const w = canvas.width;
+        const h = canvas.height;
+
+        // Left panel: weight distribution with grid
+        const panelW = w * 0.6;
+        const padding = 40;
+
+        const allVals = [...weights];
+        const vmin = Math.min(...allVals) - 0.3;
+        const vmax = Math.max(...allVals) + 0.3;
+
+        function valToX(v) { return padding + ((v - vmin) / (vmax - vmin)) * (panelW - 2 * padding); }
+
+        // Draw axis
+        const axisY = h * 0.6;
+        ctx.strokeStyle = '#3d4560';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padding, axisY);
+        ctx.lineTo(panelW - padding, axisY);
+        ctx.stroke();
+
+        // Draw grid lines
+        ctx.strokeStyle = '#6c63ff55';
+        ctx.lineWidth = 1;
+        for (let q = 0; q <= qmax; q++) {
+            const rv = (q - zeroPoint) * scale;
+            if (rv >= vmin && rv <= vmax) {
+                const x = valToX(rv);
+                ctx.beginPath();
+                ctx.moveTo(x, axisY - 80);
+                ctx.lineTo(x, axisY + 20);
+                ctx.stroke();
+            }
+        }
+
+        // Draw weights as dots with lines to quantized
+        let mse = 0;
+        weights.forEach((wt, i) => {
+            const wq = quantize(wt);
+            mse += (wt - wq) ** 2;
+            const y = 30 + (i / weights.length) * (axisY - 50);
+            const origX = valToX(wt);
+            const qX = valToX(wq);
+
+            // Error line
+            ctx.strokeStyle = `rgba(255,107,107,${Math.min(1, Math.abs(wt - wq) * 3)})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(origX, y);
+            ctx.lineTo(qX, y);
+            ctx.stroke();
+
+            // Original
+            ctx.fillStyle = '#ff6b6b';
+            ctx.beginPath();
+            ctx.arc(origX, y, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Quantized
+            ctx.fillStyle = '#00d4aa';
+            ctx.beginPath();
+            ctx.arc(qX, y, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+        });
+        mse /= weights.length;
+
+        // Right panel: loss curve
+        const rightStart = panelW + 20;
+        const rightW = w - rightStart - 30;
+
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Loss over training steps', rightStart + rightW / 2, 20);
+
+        if (lossHistory.length > 1) {
+            const maxLoss = Math.max(...lossHistory);
+            const minLoss = Math.min(...lossHistory);
+            const lossRange = maxLoss - minLoss || 1;
+
+            ctx.strokeStyle = '#6c63ff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            lossHistory.forEach((l, i) => {
+                const x = rightStart + (i / (lossHistory.length - 1)) * rightW;
+                const y = 40 + (1 - (l - minLoss) / lossRange) * (h - 80);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+        }
+
+        // Stats
+        statsDiv.innerHTML = `
+            <div class="stat-badge"><span class="stat-label">Step: </span><span class="stat-value">${step}</span></div>
+            <div class="stat-badge"><span class="stat-label">Scale: </span><span class="stat-value">${scale.toFixed(4)}</span></div>
+            <div class="stat-badge"><span class="stat-label">Zero Point: </span><span class="stat-value">${Math.round(zeroPoint)}</span></div>
+            <div class="stat-badge"><span class="stat-label">MSE: </span><span class="stat-value">${mse.toFixed(6)}</span></div>
+        `;
+    }
+
+    stepBtn.addEventListener('click', trainStep);
+    resetBtn.addEventListener('click', init);
+    autoBtn.addEventListener('click', () => {
+        let i = 0;
+        const interval = setInterval(() => {
+            trainStep();
+            i++;
+            if (i >= 20) clearInterval(interval);
+        }, 100);
+    });
+    init();
+})();
+
+// === BIT PACKING VISUALIZER ===
+(function() {
+    const canvas = document.getElementById('packing-canvas');
+    const ctx = canvas.getContext('2d');
+    const bitsSelect = document.getElementById('pack-bits-select');
+    const randomBtn = document.getElementById('pack-randomize');
+
+    let values = [];
+    function randomize() {
+        const bits = parseInt(bitsSelect.value);
+        const maxQ = Math.pow(2, bits) - 1;
+        const count = Math.floor(32 / bits);
+        values = [];
+        for (let i = 0; i < count; i++) {
+            values.push(Math.floor(Math.random() * (maxQ + 1)));
+        }
+        draw();
+    }
+
+    function draw() {
+        const bits = parseInt(bitsSelect.value);
+        const count = Math.floor(32 / bits);
+        if (values.length !== count) randomize();
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const w = canvas.width;
+        const h = canvas.height;
+        const padding = 30;
+
+        // Title
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${bits}-bit: ${count} values packed into one INT32 word`, padding, 25);
+
+        // Draw the 32-bit word
+        const bitW = (w - 2 * padding) / 32;
+        const wordY = 50;
+        const wordH = 40;
+
+        // Compute packed value
+        let packed = 0;
+        values.forEach((v, i) => {
+            packed |= (v << (bits * i));
+        });
+
+        // Color each weight's bits differently
+        const colors = ['#6c63ff', '#00d4aa', '#ff6b6b', '#ffa726', '#42a5f5', '#ab47bc', '#26a69a', '#ef5350',
+                       '#7e57c2', '#66bb6a', '#ffa000', '#5c6bc0', '#8d6e63', '#78909c', '#ec407a', '#26c6da'];
+
+        for (let bit = 0; bit < 32; bit++) {
+            const x = padding + bit * bitW;
+            const valueIdx = Math.floor(bit / bits);
+            const isActive = valueIdx < count;
+            const bitVal = (packed >> bit) & 1;
+
+            ctx.fillStyle = isActive ? colors[valueIdx % colors.length] + (bitVal ? 'cc' : '44') : '#1a1d27';
+            ctx.fillRect(x + 0.5, wordY, bitW - 1, wordH);
+            ctx.strokeStyle = '#3d4560';
+            ctx.strokeRect(x + 0.5, wordY, bitW - 1, wordH);
+
+            // Bit label
+            ctx.fillStyle = bitVal ? '#fff' : '#666';
+            ctx.font = '9px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(bitVal.toString(), x + bitW / 2, wordY + wordH / 2 + 3);
+        }
+
+        // Bit position labels
+        ctx.fillStyle = '#666';
+        ctx.font = '8px monospace';
+        for (let bit = 0; bit < 32; bit += 4) {
+            ctx.fillText(bit.toString(), padding + bit * bitW + bitW / 2, wordY + wordH + 12);
+        }
+
+        // Draw individual values below
+        const valY = wordY + wordH + 40;
+        const valW = Math.min(80, (w - 2 * padding) / count - 5);
+
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('Individual quantized values:', padding, valY);
+
+        values.forEach((v, i) => {
+            const x = padding + i * (valW + 5);
+            const y = valY + 15;
+
+            ctx.fillStyle = colors[i % colors.length] + '33';
+            ctx.fillRect(x, y, valW, 30);
+            ctx.strokeStyle = colors[i % colors.length];
+            ctx.strokeRect(x, y, valW, 30);
+
+            ctx.fillStyle = colors[i % colors.length];
+            ctx.font = '11px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(`w${i}=${v}`, x + valW / 2, y + 12);
+
+            // Binary representation
+            ctx.fillStyle = '#9ca3af';
+            ctx.font = '9px monospace';
+            ctx.fillText(v.toString(2).padStart(bits, '0'), x + valW / 2, y + 24);
+        });
+
+        // Formula
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'left';
+        const formulaY = valY + 65;
+        ctx.fillText(`Packed INT32 = ${values.map((v,i) => `w${i}<<${bits*i}`).join(' | ')}`, padding, formulaY);
+        ctx.fillStyle = '#00d4aa';
+        ctx.fillText(`             = 0x${(packed >>> 0).toString(16).padStart(8, '0').toUpperCase()}  (${(packed >>> 0).toString()})`, padding, formulaY + 18);
+
+        // Unpack formula
+        ctx.fillStyle = '#9ca3af';
+        ctx.fillText(`Unpack: w[i] = (packed >> (bits*i)) & ${(Math.pow(2,bits)-1)}`, padding, formulaY + 40);
+    }
+
+    bitsSelect.addEventListener('change', () => { values = []; draw(); });
+    randomBtn.addEventListener('click', randomize);
+    randomize();
+})();
+
+// === GROUP-WISE QUANTIZATION ===
+(function() {
+    const canvas = document.getElementById('group-canvas');
+    const ctx = canvas.getContext('2d');
+    const groupSlider = document.getElementById('group-size-slider');
+    const bitsSlider = document.getElementById('group-bits-slider');
+    const groupVal = document.getElementById('group-size-val');
+    const bitsVal = document.getElementById('group-bits-val');
+    const statsDiv = document.getElementById('group-stats');
+    const regenBtn = document.getElementById('group-regenerate');
+
+    let allWeights = [];
+
+    function generateWeights() {
+        allWeights = [];
+        // Create a weight vector with varying distributions (simulates a real layer row)
+        for (let i = 0; i < 256; i++) {
+            const region = Math.floor(i / 64);
+            let w;
+            switch(region) {
+                case 0: w = (Math.random() - 0.5) * 0.5; break;  // narrow
+                case 1: w = (Math.random() - 0.2) * 2.0; break;  // wide, shifted
+                case 2: w = (Math.random() - 0.7) * 1.5; break;  // negative-heavy
+                case 3: w = (Math.random() - 0.5) * 3.0; break;  // very wide
+            }
+            allWeights.push(w);
+        }
+        draw();
+    }
+
+    function draw() {
+        const groupSize = parseInt(groupSlider.value);
+        const bits = parseInt(bitsSlider.value);
+        const qmax = Math.pow(2, bits) - 1;
+        groupVal.textContent = groupSize;
+        bitsVal.textContent = bits;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const cw = canvas.width;
+        const ch = canvas.height;
+        const padding = 40;
+
+        const n = allWeights.length;
+        const numGroups = Math.ceil(n / groupSize);
+
+        // Compute per-group scale and zero_point
+        const groups = [];
+        let totalMSE_grouped = 0;
+        for (let g = 0; g < numGroups; g++) {
+            const start = g * groupSize;
+            const end = Math.min(start + groupSize, n);
+            const slice = allWeights.slice(start, end);
+            const gmin = Math.min(...slice);
+            const gmax = Math.max(...slice);
+            const range = gmax - gmin || 0.001;
+            const scale = range / qmax;
+            const zp = Math.round(-gmin / scale);
+            groups.push({ start, end, scale, zp, min: gmin, max: gmax });
+        }
+
+        // Compute per-tensor quantization for comparison
+        const globalMin = Math.min(...allWeights);
+        const globalMax = Math.max(...allWeights);
+        const globalScale = (globalMax - globalMin) / qmax;
+        const globalZP = Math.round(-globalMin / globalScale);
+
+        // Top half: per-group
+        const topH = (ch - 2*padding) / 2 - 20;
+        const botH = topH;
+        const topY = padding;
+        const botY = padding + topH + 40;
+
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`Group-wise (group_size=${groupSize}, ${numGroups} groups)`, padding, topY - 5);
+        ctx.fillText('Per-tensor (single scale for all)', padding, botY - 5);
+
+        const plotW = cw - 2 * padding;
+        const wPerWeight = plotW / n;
+
+        // Draw group-wise
+        let mseGroup = 0;
+        const colors = ['#6c63ff44', '#00d4aa44', '#ff6b6b44', '#ffa72644'];
+        groups.forEach((g, gi) => {
+            // Background for group
+            const gx = padding + g.start * wPerWeight;
+            const gw = (g.end - g.start) * wPerWeight;
+            ctx.fillStyle = colors[gi % colors.length];
+            ctx.fillRect(gx, topY, gw, topH);
+
+            for (let i = g.start; i < g.end; i++) {
+                const w = allWeights[i];
+                let q = Math.round(w / g.scale) + g.zp;
+                q = Math.max(0, Math.min(qmax, q));
+                const wq = (q - g.zp) * g.scale;
+                mseGroup += (w - wq) ** 2;
+
+                const x = padding + i * wPerWeight + wPerWeight / 2;
+                const yOrig = topY + topH / 2 - (w / 3) * (topH / 2);
+                const yQuant = topY + topH / 2 - (wq / 3) * (topH / 2);
+
+                ctx.fillStyle = '#ff6b6b';
+                ctx.beginPath();
+                ctx.arc(x, yOrig, 2, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = '#00d4aa';
+                ctx.beginPath();
+                ctx.arc(x, yQuant, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        });
+        mseGroup /= n;
+
+        // Draw per-tensor
+        let mseTensor = 0;
+        for (let i = 0; i < n; i++) {
+            const w = allWeights[i];
+            let q = Math.round(w / globalScale) + globalZP;
+            q = Math.max(0, Math.min(qmax, q));
+            const wq = (q - globalZP) * globalScale;
+            mseTensor += (w - wq) ** 2;
+
+            const x = padding + i * wPerWeight + wPerWeight / 2;
+            const yOrig = botY + botH / 2 - (w / 3) * (botH / 2);
+            const yQuant = botY + botH / 2 - (wq / 3) * (botH / 2);
+
+            ctx.fillStyle = '#ff6b6b';
+            ctx.beginPath();
+            ctx.arc(x, yOrig, 2, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#00d4aa';
+            ctx.beginPath();
+            ctx.arc(x, yQuant, 2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        mseTensor /= n;
+
+        const improvement = ((mseTensor - mseGroup) / mseTensor * 100).toFixed(1);
+        statsDiv.innerHTML = `
+            <div class="stat-badge"><span class="stat-label">Group-wise MSE: </span><span class="stat-value">${mseGroup.toFixed(6)}</span></div>
+            <div class="stat-badge"><span class="stat-label">Per-tensor MSE: </span><span class="stat-value">${mseTensor.toFixed(6)}</span></div>
+            <div class="stat-badge"><span class="stat-label">Improvement: </span><span class="stat-value">${improvement}%</span></div>
+            <div class="stat-badge"><span class="stat-label">Overhead: </span><span class="stat-value">${numGroups} × (scale + zp)</span></div>
+        `;
+    }
+
+    groupSlider.addEventListener('input', draw);
+    bitsSlider.addEventListener('input', draw);
+    regenBtn.addEventListener('click', generateWeights);
+    generateWeights();
+})();
+
+// === ERROR LANDSCAPE ===
+(function() {
+    const canvas = document.getElementById('landscape-canvas');
+    const ctx = canvas.getContext('2d');
+    const distSelect = document.getElementById('dist-select');
+    const bitsSlider = document.getElementById('landscape-bits');
+    const bitsVal = document.getElementById('landscape-bits-val');
+
+    function generateDist(type, n=200) {
+        const values = [];
+        for (let i = 0; i < n; i++) {
+            let v;
+            switch(type) {
+                case 'gaussian':
+                    v = (randn() * 0.5);
+                    break;
+                case 'laplace':
+                    const u = Math.random() - 0.5;
+                    v = -0.3 * Math.sign(u) * Math.log(1 - 2 * Math.abs(u));
+                    break;
+                case 'uniform':
+                    v = (Math.random() - 0.5) * 2;
+                    break;
+                case 'bimodal':
+                    v = (Math.random() < 0.5 ? -0.7 : 0.7) + randn() * 0.2;
+                    break;
+            }
+            values.push(v);
+        }
+        return values;
+    }
+
+    function randn() {
+        let u = 0, v = 0;
+        while (u === 0) u = Math.random();
+        while (v === 0) v = Math.random();
+        return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+    }
+
+    function computeMSE(weights, scale, bits) {
+        const qmax = Math.pow(2, bits) - 1;
+        const wmin = Math.min(...weights);
+        const zp = Math.round(-wmin / scale);
+        let mse = 0;
+        weights.forEach(w => {
+            let q = Math.round(w / scale) + zp;
+            q = Math.max(0, Math.min(qmax, q));
+            const wq = (q - zp) * scale;
+            mse += (w - wq) ** 2;
+        });
+        return mse / weights.length;
+    }
+
+    function draw() {
+        const bits = parseInt(bitsSlider.value);
+        bitsVal.textContent = bits;
+        const dist = distSelect.value;
+        const weights = generateDist(dist);
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const cw = canvas.width;
+        const ch = canvas.height;
+        const padding = 50;
+
+        // Compute MSE for range of scales
+        const scaleMin = 0.01;
+        const scaleMax = 1.0;
+        const numPoints = 200;
+        const mseValues = [];
+        let minMSE = Infinity, minScale = 0, maxMSE = 0;
+
+        for (let i = 0; i < numPoints; i++) {
+            const s = scaleMin + (i / (numPoints - 1)) * (scaleMax - scaleMin);
+            const mse = computeMSE(weights, s, bits);
+            mseValues.push({ scale: s, mse });
+            if (mse < minMSE) { minMSE = mse; minScale = s; }
+            if (mse > maxMSE) maxMSE = mse;
+        }
+
+        const plotW = cw - 2 * padding;
+        const plotH = ch - 2 * padding;
+
+        // Axes
+        ctx.strokeStyle = '#3d4560';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padding, ch - padding);
+        ctx.lineTo(cw - padding, ch - padding);
+        ctx.moveTo(padding, ch - padding);
+        ctx.lineTo(padding, padding);
+        ctx.stroke();
+
+        // Labels
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Scale (s)', cw / 2, ch - 10);
+        ctx.save();
+        ctx.translate(15, ch / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText('MSE', 0, 0);
+        ctx.restore();
+
+        // Draw curve
+        ctx.strokeStyle = '#6c63ff';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        mseValues.forEach((pt, i) => {
+            const x = padding + (pt.scale - scaleMin) / (scaleMax - scaleMin) * plotW;
+            const y = ch - padding - ((pt.mse - minMSE) / (maxMSE - minMSE || 1)) * plotH * 0.9;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        // Mark minimum
+        const minX = padding + (minScale - scaleMin) / (scaleMax - scaleMin) * plotW;
+        const minY = ch - padding - ((minMSE - minMSE) / (maxMSE - minMSE || 1)) * plotH * 0.9;
+
+        ctx.fillStyle = '#00d4aa';
+        ctx.beginPath();
+        ctx.arc(minX, minY, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#00d4aa';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`optimal s=${minScale.toFixed(3)}`, minX, minY - 15);
+        ctx.fillText(`MSE=${minMSE.toFixed(5)}`, minX, minY - 30);
+
+        // Max-Min initialization marker
+        const wmin = Math.min(...weights);
+        const wmax = Math.max(...weights);
+        const initScale = (wmax - wmin) / (Math.pow(2, bits) - 1);
+        const initX = padding + (initScale - scaleMin) / (scaleMax - scaleMin) * plotW;
+        const initMSE = computeMSE(weights, initScale, bits);
+        const initY = ch - padding - ((initMSE - minMSE) / (maxMSE - minMSE || 1)) * plotH * 0.9;
+
+        ctx.fillStyle = '#ff6b6b';
+        ctx.beginPath();
+        ctx.arc(initX, initY, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ff6b6b';
+        ctx.fillText(`init (max-min): s=${initScale.toFixed(3)}`, initX, initY - 12);
+    }
+
+    distSelect.addEventListener('change', draw);
+    bitsSlider.addEventListener('input', draw);
+    draw();
+})();
+
+// === PIPELINE WALKTHROUGH ===
+(function() {
+    const weightSlider = document.getElementById('pipeline-weight');
+    const weightVal = document.getElementById('pipeline-weight-val');
+    const stepsDiv = document.getElementById('pipeline-steps');
+
+    function update() {
+        const w = parseFloat(weightSlider.value);
+        weightVal.textContent = w.toFixed(2);
+
+        const bits = 4;
+        const qmax = 15;
+        const scale = 0.12;
+        const zp = 6;
+
+        const step1 = w / scale;
+        const step2 = Math.round(step1);
+        const step3 = step2 + zp;
+        const step4 = Math.max(0, Math.min(qmax, step3));
+        const step5 = step4 - zp;
+        const step6 = step5 * scale;
+        const error = Math.abs(w - step6);
+
+        const clamped = step3 !== step4;
+
+        stepsDiv.innerHTML = `
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
+                <div class="stat-badge" style="text-align: center;">
+                    <div class="stat-label">1. Divide by scale</div>
+                    <div class="stat-value">${w.toFixed(3)} / ${scale} = ${step1.toFixed(3)}</div>
+                </div>
+                <div class="stat-badge" style="text-align: center;">
+                    <div class="stat-label">2. Round (STE)</div>
+                    <div class="stat-value">round(${step1.toFixed(3)}) = ${step2}</div>
+                </div>
+                <div class="stat-badge" style="text-align: center;">
+                    <div class="stat-label">3. Add zero_point</div>
+                    <div class="stat-value">${step2} + ${zp} = ${step3}</div>
+                </div>
+                <div class="stat-badge" style="text-align: center; ${clamped ? 'border-color: var(--accent3);' : ''}">
+                    <div class="stat-label">4. Clamp [0, ${qmax}]</div>
+                    <div class="stat-value">${clamped ? `clamp(${step3}) = ${step4}` : `${step4} (no clamp)`}</div>
+                </div>
+                <div class="stat-badge" style="text-align: center;">
+                    <div class="stat-label">5. Subtract zero_point</div>
+                    <div class="stat-value">${step4} - ${zp} = ${step5}</div>
+                </div>
+                <div class="stat-badge" style="text-align: center;">
+                    <div class="stat-label">6. Multiply by scale</div>
+                    <div class="stat-value">${step5} × ${scale} = ${step6.toFixed(3)}</div>
+                </div>
+            </div>
+            <div style="margin-top: 1rem; display: flex; gap: 1rem; flex-wrap: wrap;">
+                <div class="stat-badge"><span class="stat-label">Input: </span><span class="stat-value">${w.toFixed(3)}</span></div>
+                <div class="stat-badge"><span class="stat-label">Output: </span><span class="stat-value">${step6.toFixed(3)}</span></div>
+                <div class="stat-badge"><span class="stat-label">Quantization error: </span><span class="stat-value" style="color: ${error > 0.05 ? 'var(--accent3)' : 'var(--accent2)'};">${error.toFixed(4)}</span></div>
+                <div class="stat-badge"><span class="stat-label">Integer representation: </span><span class="stat-value">${step4} (${step4.toString(2).padStart(bits, '0')}₂)</span></div>
+            </div>
+        `;
+    }
+
+    weightSlider.addEventListener('input', update);
+    update();
+})();
+
+// === MEMORY COMPARISON ===
+(function() {
+    const canvas = document.getElementById('memory-canvas');
+    const ctx = canvas.getContext('2d');
+
+    const data = [
+        { label: 'FP16', size: 13.2, color: '#9ca3af' },
+        { label: 'W4G128', size: 3.7, color: '#6c63ff' },
+        { label: 'W3G128', size: 3.1, color: '#42a5f5' },
+        { label: 'W2G64', size: 2.3, color: '#00d4aa' },
+    ];
+
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const padding = 80;
+    const barH = 30;
+    const gap = 15;
+    const maxSize = data[0].size;
+    const barMaxW = cw - 2 * padding - 80;
+
+    data.forEach((d, i) => {
+        const y = padding + i * (barH + gap);
+        const barW = (d.size / maxSize) * barMaxW;
+
+        // Label
+        ctx.fillStyle = '#e4e4e7';
+        ctx.font = '12px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(d.label, padding - 10, y + barH / 2 + 4);
+
+        // Bar
+        ctx.fillStyle = d.color;
+        ctx.beginPath();
+        ctx.roundRect(padding, y, barW, barH, 4);
+        ctx.fill();
+
+        // Size label
+        ctx.fillStyle = '#e4e4e7';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${d.size} GB`, padding + barW + 10, y + barH / 2 + 4);
+
+        // Compression ratio
+        if (i > 0) {
+            const ratio = (data[0].size / d.size).toFixed(1);
+            ctx.fillStyle = '#00d4aa';
+            ctx.fillText(`${ratio}×`, padding + barW + 60, y + barH / 2 + 4);
+        }
+    });
+})();
+
+// === ABLATION: WHAT TO TRAIN ===
+(function() {
+    const canvas = document.getElementById('ablation-canvas');
+    const ctx = canvas.getContext('2d');
+
+    const data = [
+        { label: 'Clip only', params: '6.3M', mem: '6.4GB', ppl: 11.28, acc: 53.20, color: '#9ca3af' },
+        { label: 's, z only', params: '6.3M', mem: '6.4GB', ppl: 10.26, acc: 55.20, color: '#42a5f5' },
+        { label: 'W only', params: '202.4M', mem: '8.5GB', ppl: 14.32, acc: 46.50, color: '#ffa726' },
+        { label: 's, z, W (all)', params: '208.7M', mem: '8.5GB', ppl: 8.53, acc: 58.99, color: '#00d4aa' },
+    ];
+
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const padding = { left: 100, right: 40, top: 40, bottom: 50 };
+    const plotW = cw - padding.left - padding.right;
+    const plotH = ch - padding.top - padding.bottom;
+    const barH = 35;
+    const gap = 12;
+
+    // Draw by accuracy
+    const maxAcc = 60;
+    const minAcc = 40;
+
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Zero-shot Accuracy (%)', padding.left + plotW / 2, ch - 10);
+
+    data.forEach((d, i) => {
+        const y = padding.top + i * (barH + gap);
+        const barW = ((d.acc - minAcc) / (maxAcc - minAcc)) * plotW;
+
+        ctx.fillStyle = '#e4e4e7';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(d.label, padding.left - 10, y + barH / 2 + 4);
+
+        ctx.fillStyle = d.color;
+        ctx.beginPath();
+        ctx.roundRect(padding.left, y, barW, barH, 4);
+        ctx.fill();
+
+        ctx.fillStyle = '#e4e4e7';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${d.acc}% | PPL ${d.ppl} | ${d.params}`, padding.left + barW + 10, y + barH / 2 + 4);
+    });
+
+    // Axis ticks
+    for (let a = 40; a <= 60; a += 5) {
+        const x = padding.left + ((a - minAcc) / (maxAcc - minAcc)) * plotW;
+        ctx.fillStyle = '#666';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${a}%`, x, ch - 30);
+        ctx.strokeStyle = '#2d334844';
+        ctx.beginPath();
+        ctx.moveTo(x, padding.top);
+        ctx.lineTo(x, padding.top + data.length * (barH + gap));
+        ctx.stroke();
+    }
+})();
+
+// === PHASE ABLATION ===
+(function() {
+    const canvas = document.getElementById('phase-ablation-canvas');
+    const ctx = canvas.getContext('2d');
+
+    const data = [
+        { label: 'No quantization training', ppl: 453.49, acc: 40.69, color: '#ff6b6b' },
+        { label: 'E2E-QP only', ppl: 9.33, acc: 55.71, color: '#ffa726' },
+        { label: 'Block-AP only', ppl: 8.53, acc: 58.99, color: '#42a5f5' },
+        { label: 'Block-AP + E2E-QP', ppl: 7.68, acc: 60.14, color: '#00d4aa' },
+    ];
+
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const padding = { left: 180, right: 150, top: 30, bottom: 40 };
+    const plotW = cw - padding.left - padding.right;
+    const barH = 30;
+    const gap = 12;
+
+    const maxAcc = 65;
+    const minAcc = 35;
+
+    data.forEach((d, i) => {
+        const y = padding.top + i * (barH + gap);
+        const barW = ((d.acc - minAcc) / (maxAcc - minAcc)) * plotW;
+
+        ctx.fillStyle = '#e4e4e7';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(d.label, padding.left - 10, y + barH / 2 + 4);
+
+        ctx.fillStyle = d.color;
+        ctx.beginPath();
+        ctx.roundRect(padding.left, y, Math.max(barW, 2), barH, 4);
+        ctx.fill();
+
+        ctx.fillStyle = '#e4e4e7';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'left';
+        const pplStr = d.ppl > 100 ? d.ppl.toFixed(0) : d.ppl.toFixed(2);
+        ctx.fillText(`${d.acc}% | PPL ${pplStr}`, padding.left + barW + 10, y + barH / 2 + 4);
+    });
+})();
+
+// === METHOD COMPARISON ===
+(function() {
+    const canvas = document.getElementById('compare-canvas');
+    const ctx = canvas.getContext('2d');
+    const select = document.getElementById('compare-bits');
+
+    const results = {
+        '2': [
+            { method: 'RTN (baseline)', ppl: 54.29, color: '#666' },
+            { method: 'GPTQ', ppl: 12.15, color: '#9ca3af' },
+            { method: 'AWQ', ppl: 12.34, color: '#78909c' },
+            { method: 'OmniQuant', ppl: 15.02, color: '#ab47bc' },
+            { method: 'AutoRound', ppl: 8.20, color: '#ffa726' },
+            { method: 'EfficientQAT', ppl: 6.86, color: '#00d4aa' },
+            { method: 'FP16', ppl: 5.47, color: '#6c63ff' },
+        ],
+        '3': [
+            { method: 'RTN', ppl: 6.29, color: '#666' },
+            { method: 'GPTQ', ppl: 6.01, color: '#9ca3af' },
+            { method: 'AWQ', ppl: 5.99, color: '#78909c' },
+            { method: 'OmniQuant', ppl: 6.58, color: '#ab47bc' },
+            { method: 'AutoRound', ppl: 6.04, color: '#ffa726' },
+            { method: 'EfficientQAT', ppl: 5.81, color: '#00d4aa' },
+            { method: 'FP16', ppl: 5.47, color: '#6c63ff' },
+        ],
+        '4': [
+            { method: 'RTN', ppl: 5.67, color: '#666' },
+            { method: 'GPTQ', ppl: 5.63, color: '#9ca3af' },
+            { method: 'AWQ', ppl: 5.60, color: '#78909c' },
+            { method: 'OmniQuant', ppl: 5.73, color: '#ab47bc' },
+            { method: 'AutoRound', ppl: 5.60, color: '#ffa726' },
+            { method: 'EfficientQAT', ppl: 5.53, color: '#00d4aa' },
+            { method: 'FP16', ppl: 5.47, color: '#6c63ff' },
+        ],
+    };
+
+    function draw() {
+        const bits = select.value;
+        const data = results[bits];
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const cw = canvas.width;
+        const ch = canvas.height;
+        const padding = { left: 120, right: 60, top: 30, bottom: 50 };
+        const plotW = cw - padding.left - padding.right;
+        const barH = 28;
+        const gap = 8;
+
+        const ppls = data.map(d => d.ppl);
+        const maxPPL = Math.min(Math.max(...ppls) * 1.1, ppls[0] * 1.1);
+        const minPPL = Math.max(Math.min(...ppls) * 0.9, 4);
+
+        ctx.fillStyle = '#9ca3af';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Perplexity (↓ better) — Llama-2-7B, WikiText-2, ${bits}-bit`, cw / 2, ch - 10);
+
+        data.forEach((d, i) => {
+            const y = padding.top + i * (barH + gap);
+            const barW = ((d.ppl - minPPL) / (maxPPL - minPPL)) * plotW;
+
+            ctx.fillStyle = '#e4e4e7';
+            ctx.font = '11px monospace';
+            ctx.textAlign = 'right';
+            ctx.fillText(d.method, padding.left - 10, y + barH / 2 + 4);
+
+            ctx.fillStyle = d.color;
+            ctx.beginPath();
+            ctx.roundRect(padding.left, y, Math.max(barW, 3), barH, 3);
+            ctx.fill();
+
+            ctx.fillStyle = '#e4e4e7';
+            ctx.font = '11px monospace';
+            ctx.textAlign = 'left';
+            ctx.fillText(d.ppl.toFixed(2), padding.left + barW + 8, y + barH / 2 + 4);
+        });
+    }
+
+    select.addEventListener('change', draw);
+    draw();
+})();
+
+// === GRADIENT REGIONS ===
+(function() {
+    const canvas = document.getElementById('gradient-canvas');
+    const ctx = canvas.getContext('2d');
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const padding = 50;
+
+    const bits = 3;
+    const qmax = 7;
+    const scale = 0.3;
+    const zp = 2;
+
+    const plotW = cw - 2 * padding;
+    const plotH = ch - 2 * padding;
+
+    // Real value range
+    const minReal = (0 - zp) * scale;
+    const maxReal = (qmax - zp) * scale;
+    const displayMin = minReal - 0.5;
+    const displayMax = maxReal + 0.5;
+    const displayRange = displayMax - displayMin;
+
+    function valToX(v) { return padding + ((v - displayMin) / displayRange) * plotW; }
+
+    // Background regions
+    // Clipped below (red)
+    const clipLowX = valToX(minReal);
+    ctx.fillStyle = '#ff6b6b22';
+    ctx.fillRect(padding, padding, clipLowX - padding, plotH);
+
+    // Valid range (green)
+    const clipHighX = valToX(maxReal);
+    ctx.fillStyle = '#00d4aa15';
+    ctx.fillRect(clipLowX, padding, clipHighX - clipLowX, plotH);
+
+    // Clipped above (red)
+    ctx.fillStyle = '#ff6b6b22';
+    ctx.fillRect(clipHighX, padding, cw - padding - clipHighX, plotH);
+
+    // Grid lines
+    ctx.strokeStyle = '#6c63ff88';
+    ctx.lineWidth = 1;
+    for (let q = 0; q <= qmax; q++) {
+        const rv = (q - zp) * scale;
+        const x = valToX(rv);
+        ctx.beginPath();
+        ctx.moveTo(x, padding);
+        ctx.lineTo(x, padding + plotH);
+        ctx.stroke();
+
+        ctx.fillStyle = '#6c63ff';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`q=${q}`, x, padding + plotH + 15);
+    }
+
+    // Labels for regions
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+
+    ctx.fillStyle = '#ff6b6b';
+    ctx.fillText('CLIPPED (below)', (padding + clipLowX) / 2, padding + 20);
+    ctx.font = '10px monospace';
+    ctx.fillText('∂Ŵ/∂s = -z', (padding + clipLowX) / 2, padding + 38);
+    ctx.fillText('∂Ŵ/∂z = -1', (padding + clipLowX) / 2, padding + 52);
+    ctx.fillText('∂Ŵ/∂w = 0', (padding + clipLowX) / 2, padding + 66);
+
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = '#00d4aa';
+    ctx.fillText('VALID RANGE', (clipLowX + clipHighX) / 2, padding + 20);
+    ctx.font = '10px monospace';
+    ctx.fillText('∂Ŵ/∂s = ⌊w/s⌉ - w/s', (clipLowX + clipHighX) / 2, padding + 38);
+    ctx.fillText('∂Ŵ/∂z = 0', (clipLowX + clipHighX) / 2, padding + 52);
+    ctx.fillText('∂Ŵ/∂w = 1 (STE)', (clipLowX + clipHighX) / 2, padding + 66);
+
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = '#ff6b6b';
+    ctx.fillText('CLIPPED (above)', (clipHighX + cw - padding) / 2, padding + 20);
+    ctx.font = '10px monospace';
+    ctx.fillText('∂Ŵ/∂s = 2ᴺ-1-z', (clipHighX + cw - padding) / 2, padding + 38);
+    ctx.fillText('∂Ŵ/∂z = -1', (clipHighX + cw - padding) / 2, padding + 52);
+    ctx.fillText('∂Ŵ/∂w = 0', (clipHighX + cw - padding) / 2, padding + 66);
+
+    // Draw quantization function (staircase)
+    ctx.strokeStyle = '#ffffff88';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    const stepsN = 200;
+    for (let i = 0; i <= stepsN; i++) {
+        const realW = displayMin + (i / stepsN) * displayRange;
+        let qInt = Math.round(realW / scale) + zp;
+        qInt = Math.max(0, Math.min(qmax, qInt));
+        const dequant = (qInt - zp) * scale;
+        const x = valToX(realW);
+        const y = padding + plotH - ((dequant - displayMin) / displayRange) * plotH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Axis labels
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Input weight value (w)', cw / 2, ch - 5);
+    ctx.save();
+    ctx.translate(12, ch / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('Dequantized output (Ŵ)', 0, 0);
+    ctx.restore();
+
+    // Title annotation
+    ctx.fillStyle = '#ffffff88';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('White line: quantize→dequantize staircase function', padding, ch - 15);
+})();
+
+// === TRAINING TIME ===
+(function() {
+    const canvas = document.getElementById('time-canvas');
+    const ctx = canvas.getContext('2d');
+    const data = [
+        { label: '7B', blockAP: 3.3, e2e: 1.5 },
+        { label: '13B', blockAP: 6.6, e2e: 3.2 },
+        { label: '70B', blockAP: 26.6, e2e: 14.3 },
+    ];
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const padding = { left: 50, right: 30, top: 20, bottom: 40 };
+    const plotW = cw - padding.left - padding.right;
+    const barH = 30;
+    const gap = 15;
+    const maxTime = 42;
+
+    data.forEach((d, i) => {
+        const y = padding.top + i * (barH + gap);
+        const w1 = (d.blockAP / maxTime) * plotW;
+        const w2 = (d.e2e / maxTime) * plotW;
+
+        ctx.fillStyle = '#e4e4e7';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(d.label, padding.left - 10, y + barH / 2 + 4);
+
+        ctx.fillStyle = '#6c63ff';
+        ctx.beginPath();
+        ctx.roundRect(padding.left, y, w1, barH, [4, 0, 0, 4]);
+        ctx.fill();
+
+        ctx.fillStyle = '#00d4aa';
+        ctx.beginPath();
+        ctx.roundRect(padding.left + w1, y, w2, barH, [0, 4, 4, 0]);
+        ctx.fill();
+
+        ctx.fillStyle = '#e4e4e7';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${(d.blockAP + d.e2e).toFixed(1)}h`, padding.left + w1 + w2 + 8, y + barH / 2 + 4);
+    });
+
+    // Legend
+    ctx.fillStyle = '#6c63ff';
+    ctx.fillRect(padding.left, ch - 20, 12, 12);
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('Block-AP', padding.left + 16, ch - 10);
+
+    ctx.fillStyle = '#00d4aa';
+    ctx.fillRect(padding.left + 90, ch - 20, 12, 12);
+    ctx.fillStyle = '#9ca3af';
+    ctx.fillText('E2E-QP', padding.left + 106, ch - 10);
+})();
+
+// === TRAINING MEMORY ===
+(function() {
+    const canvas = document.getElementById('mem-train-canvas');
+    const ctx = canvas.getContext('2d');
+    const data = [
+        { label: '7B', mem: 8.5 },
+        { label: '13B', mem: 12 },
+        { label: '70B', mem: 18 },
+    ];
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const padding = { left: 50, right: 60, top: 20, bottom: 40 };
+    const plotW = cw - padding.left - padding.right;
+    const barH = 30;
+    const gap = 15;
+    const maxMem = 80;
+
+    // A100 capacity line
+    const a100X = padding.left + (80 / maxMem) * plotW;
+    ctx.strokeStyle = '#ff6b6b44';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(a100X, padding.top);
+    ctx.lineTo(a100X, ch - padding.bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ff6b6b88';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('A100 80GB', a100X, padding.top - 5);
+
+    data.forEach((d, i) => {
+        const y = padding.top + i * (barH + gap);
+        const barW = (d.mem / maxMem) * plotW;
+
+        ctx.fillStyle = '#e4e4e7';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(d.label, padding.left - 10, y + barH / 2 + 4);
+
+        ctx.fillStyle = '#6c63ff';
+        ctx.beginPath();
+        ctx.roundRect(padding.left, y, barW, barH, 4);
+        ctx.fill();
+
+        ctx.fillStyle = '#e4e4e7';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${d.mem} GB`, padding.left + barW + 8, y + barH / 2 + 4);
+    });
+})();
+
+// === CALIBRATION SENSITIVITY ===
+(function() {
+    const canvas = document.getElementById('calib-canvas');
+    const ctx = canvas.getContext('2d');
+    const data = [
+        { samples: 256, gap: 1.52, acc: 57.14 },
+        { samples: 1024, gap: 0.48, acc: 58.23 },
+        { samples: 4096, gap: 0.06, acc: 58.99 },
+        { samples: 8192, gap: 0.04, acc: 59.05 },
+    ];
+
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const padding = { left: 60, right: 60, top: 30, bottom: 50 };
+    const plotW = cw - padding.left - padding.right;
+    const plotH = ch - padding.top - padding.bottom;
+
+    // Draw accuracy curve
+    const minAcc = 56;
+    const maxAcc = 60;
+    const xPositions = [0, 0.33, 0.66, 1.0];
+
+    // Axis
+    ctx.strokeStyle = '#3d4560';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, ch - padding.bottom);
+    ctx.lineTo(cw - padding.right, ch - padding.bottom);
+    ctx.moveTo(padding.left, ch - padding.bottom);
+    ctx.lineTo(padding.left, padding.top);
+    ctx.stroke();
+
+    // X labels
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    data.forEach((d, i) => {
+        const x = padding.left + xPositions[i] * plotW;
+        ctx.fillText(d.samples.toString(), x, ch - padding.bottom + 18);
+    });
+    ctx.font = '11px sans-serif';
+    ctx.fillText('Calibration Samples', padding.left + plotW / 2, ch - 8);
+
+    // Y labels
+    ctx.textAlign = 'right';
+    ctx.font = '10px monospace';
+    for (let a = 56; a <= 60; a += 1) {
+        const y = ch - padding.bottom - ((a - minAcc) / (maxAcc - minAcc)) * plotH;
+        ctx.fillText(`${a}%`, padding.left - 8, y + 4);
+        ctx.strokeStyle = '#2d334844';
+        ctx.beginPath();
+        ctx.moveTo(padding.left, y);
+        ctx.lineTo(cw - padding.right, y);
+        ctx.stroke();
+    }
+
+    // Accuracy line
+    ctx.strokeStyle = '#00d4aa';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    data.forEach((d, i) => {
+        const x = padding.left + xPositions[i] * plotW;
+        const y = ch - padding.bottom - ((d.acc - minAcc) / (maxAcc - minAcc)) * plotH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Points
+    data.forEach((d, i) => {
+        const x = padding.left + xPositions[i] * plotW;
+        const y = ch - padding.bottom - ((d.acc - minAcc) / (maxAcc - minAcc)) * plotH;
+        ctx.fillStyle = '#00d4aa';
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#e4e4e7';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${d.acc}%`, x, y - 12);
+        ctx.fillStyle = '#ff6b6b';
+        ctx.fillText(`gap=${d.gap}`, x, y - 25);
+    });
+
+    // Highlight 4096
+    const optX = padding.left + xPositions[2] * plotW;
+    const optY = ch - padding.bottom - ((data[2].acc - minAcc) / (maxAcc - minAcc)) * plotH;
+    ctx.strokeStyle = '#00d4aa44';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.arc(optX, optY, 15, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+})();
+
+// === EFFECTIVE BITS CALCULATOR ===
+(function() {
+    const bitsSlider = document.getElementById('eff-bits');
+    const groupSlider = document.getElementById('eff-group');
+    const bitsVal = document.getElementById('eff-bits-val');
+    const groupVal = document.getElementById('eff-group-val');
+    const resultDiv = document.getElementById('eff-result');
+
+    function update() {
+        const N = parseInt(bitsSlider.value);
+        const g = parseInt(groupSlider.value);
+        bitsVal.textContent = N;
+        groupVal.textContent = g;
+
+        const effBits = N + (N + 16) / g;
+        const compression = 16 / effBits;
+
+        // Example: Llama-2-7B has ~6.7B params
+        const modelParams = 6.7;
+        const fp16Size = modelParams * 2; // GB
+        const quantSize = modelParams * effBits / 8;
+
+        resultDiv.innerHTML = `
+            <div class="stats-row">
+                <div class="stat-badge">
+                    <span class="stat-label">Formula: </span>
+                    <span class="stat-value">N + (N+16)/g = ${N} + (${N}+16)/${g}</span>
+                </div>
+                <div class="stat-badge">
+                    <span class="stat-label">Effective bits/param: </span>
+                    <span class="stat-value">${effBits.toFixed(2)}</span>
+                </div>
+                <div class="stat-badge">
+                    <span class="stat-label">Compression vs FP16: </span>
+                    <span class="stat-value">${compression.toFixed(1)}×</span>
+                </div>
+                <div class="stat-badge">
+                    <span class="stat-label">Llama-2-7B size: </span>
+                    <span class="stat-value">${quantSize.toFixed(1)} GB (from ${fp16Size.toFixed(1)} GB)</span>
+                </div>
+            </div>
+            <p style="font-size: 0.85rem; margin-top: 0.8rem; color: var(--text-dim);">
+                Breakdown: ${N} bits for each weight integer + ${(N/g).toFixed(3)} bits amortized zero_point overhead +
+                ${(16/g).toFixed(3)} bits amortized FP16 scale overhead per weight.
+            </p>
+        `;
+    }
+
+    bitsSlider.addEventListener('input', update);
+    groupSlider.addEventListener('input', update);
+    update();
+})();
+</script>
+
+</body>
+</html>
