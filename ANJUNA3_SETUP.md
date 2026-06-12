@@ -17,6 +17,20 @@ cp .env.example .env
 # Edit .env and set your WANDB_API_KEY
 ```
 
+`train.py` (the unified CLI below) reads `.env` automatically via `load_dotenv()`,
+logs into wandb, and defaults to `--wandb_project qat` — so every unified-CLI run is
+logged to wandb out of the box.
+
+The **manual phase commands** (`main_block_ap.py` / `main_e2e_qp.py`) do **not** read
+`.env`. They authenticate from the `WANDB_API_KEY` environment variable (or a prior
+`wandb login`). Before running any manual command, load the key into your shell:
+
+```bash
+set -a; source .env; set +a    # exports WANDB_API_KEY from .env
+# or, once per machine:
+wandb login
+```
+
 ## Download Llama-2-7B
 
 ```bash
@@ -27,7 +41,8 @@ Requires Hugging Face account with Llama 2 access approved.
 
 ## Training (unified CLI)
 
-Run both phases with wandb logging:
+Run both phases with wandb logging (both phases log to a single wandb run under
+project `qat`; pass `--wandb_project`/`--wandb_run_name` to override):
 
 ```bash
 python train.py \
@@ -38,7 +53,8 @@ python train.py \
   --scheme uniform_affine \
   --dataset redpajama \
   --e2e_batch_size 1 \
-  --gradient_accumulation_steps 32
+  --gradient_accumulation_steps 32 \
+  --wandb_project qat
 ```
 
 Run only Block-AP:
@@ -67,6 +83,12 @@ python train.py \
 ```
 
 ## Manual phase commands (without unified CLI)
+
+> Run `set -a; source .env; set +a` first (see [wandb Setup](#wandb-setup)) so
+> `WANDB_API_KEY` is exported — these scripts do not read `.env` themselves.
+> Each phase below passes `--wandb_project qat`, which enables wandb logging.
+> Manual runs create a separate wandb run per phase (unlike the unified CLI, which
+> shares one run across both phases).
 
 ### Phase 1: Block-AP
 
@@ -119,6 +141,7 @@ CUDA_VISIBLE_DEVICES=0 python main_e2e_qp.py \
   --preprocessing_num_workers 32 \
   --do_ppl_eval \
   --wandb_project qat \
+  --report_to wandb \
   --scheme uniform_affine
 ```
 

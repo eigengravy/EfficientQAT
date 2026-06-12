@@ -44,6 +44,10 @@ def main():
     parser.add_argument("--e2e_batch_size", type=int, default=1, help="Batch size for E2E-QP")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=32, help="Grad accum for E2E-QP")
     parser.add_argument("--training_seqlen", type=int, default=2048, help="Sequence length for Block-AP")
+    parser.add_argument("--train_size", type=int, default=4096, help="Number of Block-AP calibration samples")
+    parser.add_argument("--val_size", type=int, default=64, help="Number of Block-AP validation samples")
+    parser.add_argument("--off_load_to_disk", action="store_true", default=False,
+                        help="Stream Block-AP hidden-state caches to disk instead of RAM (avoids RAM OOM on low-memory machines)")
     parser.add_argument("--pt_context_len", type=int, default=4096, help="Context length for E2E-QP")
     parser.add_argument("--num_train_epochs", type=int, default=1, help="Epochs for E2E-QP")
 
@@ -145,6 +149,8 @@ def main():
             "--epochs", str(args.epochs),
             "--batch_size", str(args.batch_size),
             "--training_seqlen", str(args.training_seqlen),
+            "--train_size", str(args.train_size),
+            "--val_size", str(args.val_size),
             "--calib_dataset", args.dataset,
             "--seed", str(args.seed),
             "--save_quant_dir", block_ap_model,
@@ -152,6 +158,8 @@ def main():
             "--wandb_run_id", run_id,
             "--scheme", args.scheme,
         ]
+        if args.off_load_to_disk:
+            cmd.append("--off_load_to_disk")
         if args.eval_ppl:
             cmd.append("--eval_ppl")
         if args.eval_tasks:

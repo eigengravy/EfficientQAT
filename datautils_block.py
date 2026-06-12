@@ -120,7 +120,7 @@ def get_redpajama(tokenizer, train_size, val_size, seed, seqlen):
         loacal_dataset = "/cpfs01/user/chenmengzhao/huggingface/datasets/togethercomputer___red_pajama-data-1_t-sample"
         traindata = load_dataset(loacal_dataset,split='train')   
     except:
-        traindata = load_dataset("togethercomputer/RedPajama-Data-1T-Sample",split='train')   
+        traindata = load_dataset("ll922/RedPajama-Data-1T-Sample-Backup",split='train')   
     random.seed(seed)
     traindata = traindata.shuffle(seed=seed) 
     trainloader = []
