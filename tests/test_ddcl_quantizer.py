@@ -1,4 +1,4 @@
-"""Tests for DDCLFixedLengthQuantizer and round_dithered_ste."""
+"""Tests for DDCLQuantizer and round_dithered_ste."""
 import sys
 sys.path.insert(0, sys.path[0] + '/..')
 
@@ -6,7 +6,7 @@ import pytest
 import torch
 from quantize.quantizer import (
     round_ste, round_dithered_ste,
-    UniformAffineQuantizer, DDCLFixedLengthQuantizer, get_quantizer,
+    UniformAffineQuantizer, DDCLQuantizer, get_quantizer,
 )
 
 
@@ -27,14 +27,17 @@ def test_round_dithered_ste_unbiased():
     assert torch.allclose(mean, x, atol=0.05), f"Expected mean ≈ {x}, got {mean}"
 
 
-def test_round_dithered_ste_probability():
+def test_round_dithered_ste_is_subtractive_not_integer_rounding():
     torch.manual_seed(0)
-    x = torch.tensor([2.3])
-    n_samples = 50000
-    results = torch.stack([round_dithered_ste(x) for _ in range(n_samples)])
-    # P(round up to 3) should be ≈ 0.3, P(round down to 2) ≈ 0.7
-    p_up = (results == 3.0).float().mean().item()
-    assert 0.25 < p_up < 0.35, f"P(round up) = {p_up}, expected ~0.3"
+    x = torch.full((1000,), 2.3)
+    y = round_dithered_ste(x)
+    residual = y - x
+    # True subtractive dither reconstructs q - eps, so the result should not
+    # be locked to integer grid points during training.
+    assert not torch.allclose(y, y.round())
+    assert residual.min().item() >= -0.5001
+    assert residual.max().item() <= 0.5001
+    assert abs(residual.mean().item()) < 0.05
 
 
 def test_round_dithered_ste_gradient():
@@ -42,7 +45,7 @@ def test_round_dithered_ste_gradient():
     y = round_dithered_ste(x)
     loss = y.sum()
     loss.backward()
-    # STE: gradient should be 1.0
+    # Subtractive dither uses identity backward for the pathwise gradient.
     assert torch.allclose(x.grad, torch.ones_like(x)), f"Grad should be 1, got {x.grad}"
 
 
@@ -55,12 +58,12 @@ def test_round_ste_gradient():
 
 
 def test_ddcl_quantizer_inherits_uniform():
-    assert issubclass(DDCLFixedLengthQuantizer, UniformAffineQuantizer)
+    assert issubclass(DDCLQuantizer, UniformAffineQuantizer)
 
 
 def test_ddcl_quantizer_eval_is_deterministic():
     weight = torch.randn(64, 128)
-    q = DDCLFixedLengthQuantizer(n_bits=4, group_size=128, weight=weight)
+    q = DDCLQuantizer(n_bits=4, group_size=128, weight=weight)
     q.eval()
     out1 = q(weight)
     out2 = q(weight)
@@ -69,11 +72,54 @@ def test_ddcl_quantizer_eval_is_deterministic():
 
 def test_ddcl_quantizer_train_is_stochastic():
     weight = torch.randn(64, 128)
-    q = DDCLFixedLengthQuantizer(n_bits=4, group_size=128, weight=weight)
+    q = DDCLQuantizer(n_bits=4, group_size=128, weight=weight)
     q.train()
     out1 = q(weight)
     out2 = q(weight)
     assert not torch.equal(out1, out2), "Train mode should be stochastic"
+
+
+def test_ddcl_quantizer_train_uses_subtractive_dither():
+    weight = torch.tensor([[2.3, -1.2, 0.4, 3.7]], dtype=torch.float32)
+    q = DDCLQuantizer(n_bits=8, group_size=4, weight=weight)
+    with torch.no_grad():
+        q.scale.fill_(1.0)
+        q.zero_point.fill_(16.0)
+    q.train()
+    torch.manual_seed(123)
+    out = q(weight)
+    residual = out - weight
+    assert not torch.allclose(out, out.round())
+    assert residual.min().item() >= -0.5001
+    assert residual.max().item() <= 0.5001
+
+
+def test_ddcl_train_is_unclamped_but_eval_is_clamped():
+    weight = torch.tensor([[10.0]], dtype=torch.float32)
+    q = DDCLQuantizer(n_bits=2, group_size=1, weight=weight)
+    with torch.no_grad():
+        q.scale.fill_(1.0)
+        q.zero_point.fill_(0.0)
+
+    q.train()
+    torch.manual_seed(0)
+    train_out = q(weight)
+    assert train_out.item() > q.qmax
+
+    q.eval()
+    eval_out = q(weight)
+    assert eval_out.item() == float(q.qmax)
+
+
+def test_ddcl_saturation_rate_detects_fixed_range_overflow():
+    weight = torch.tensor([[10.0, 2.0]], dtype=torch.float32)
+    q = DDCLQuantizer(n_bits=2, group_size=2, weight=weight)
+    with torch.no_grad():
+        q.scale.fill_(1.0)
+        q.zero_point.fill_(0.0)
+
+    rate = q.ddcl_saturation_rate(weight)
+    assert 0.49 < rate.item() < 0.51
 
 
 def test_uniform_quantizer_always_deterministic():
@@ -88,9 +134,9 @@ def test_uniform_quantizer_always_deterministic():
 def test_get_quantizer_factory():
     weight = torch.randn(64, 128)
     q_uniform = get_quantizer("uniform_affine", n_bits=4, group_size=128, weight=weight)
-    q_ddcl = get_quantizer("ddcl_fixed", n_bits=4, group_size=128, weight=weight)
+    q_ddcl = get_quantizer("ddcl", n_bits=4, group_size=128, weight=weight)
     assert isinstance(q_uniform, UniformAffineQuantizer)
-    assert isinstance(q_ddcl, DDCLFixedLengthQuantizer)
+    assert isinstance(q_ddcl, DDCLQuantizer)
 
 
 def test_get_quantizer_unknown_scheme_raises():
@@ -101,7 +147,7 @@ def test_get_quantizer_unknown_scheme_raises():
 
 def test_ddcl_output_in_valid_range():
     weight = torch.randn(64, 128) * 3
-    q = DDCLFixedLengthQuantizer(n_bits=2, group_size=128, weight=weight)
+    q = DDCLQuantizer(n_bits=2, group_size=128, weight=weight)
     q.train()
     for _ in range(10):
         out = q(weight)
@@ -111,7 +157,7 @@ def test_ddcl_output_in_valid_range():
 
 def test_ddcl_gradient_flows_through_quantizer():
     weight = torch.randn(64, 128, requires_grad=True)
-    q = DDCLFixedLengthQuantizer(n_bits=4, group_size=128, weight=weight.detach())
+    q = DDCLQuantizer(n_bits=4, group_size=128, weight=weight.detach())
     q.train()
     # Simulate forward pass
     out = q(weight)
@@ -119,6 +165,16 @@ def test_ddcl_gradient_flows_through_quantizer():
     loss.backward()
     assert weight.grad is not None
     assert weight.grad.abs().sum() > 0, "Gradients should flow through quantizer"
+
+
+def test_ddcl_bit_cost_is_positive_and_differentiable():
+    weight = torch.randn(64, 128, requires_grad=True)
+    q = DDCLQuantizer(n_bits=4, group_size=128, weight=weight.detach())
+    bit_cost = q.ddcl_bit_cost(weight)
+    bit_cost.backward()
+    assert bit_cost.item() > 0
+    assert weight.grad is not None
+    assert weight.grad.abs().sum() > 0
 
 
 if __name__ == "__main__":

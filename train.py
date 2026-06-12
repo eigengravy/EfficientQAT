@@ -54,12 +54,14 @@ def main():
     # Learning rates
     parser.add_argument("--quant_lr", type=float, default=1e-4, help="LR for quantization params (Block-AP)")
     parser.add_argument("--weight_lr", type=float, default=1e-5, help="LR for weights (Block-AP)")
+    parser.add_argument("--ddcl_lambda", type=float, default=1e-4,
+                        help="Weight for DDCL-style bit-cost regularizer during Block-AP. Only applied with --scheme ddcl.")
     parser.add_argument("--learning_rate", type=float, default=1e-5, help="LR for E2E-QP")
 
     # Experiment
     parser.add_argument("--scheme", type=str, default="uniform_affine",
-                        choices=["uniform_affine", "ddcl_fixed"],
-                        help="Quantizer scheme: 'uniform_affine' (deterministic STE) or 'ddcl_fixed' (DDCL fixed-length dithered rounding)")
+                        choices=["uniform_affine", "ddcl"],
+                        help="Quantizer scheme: 'uniform_affine' (deterministic STE) or 'ddcl' (subtractive dither + bit-cost regularization)")
     parser.add_argument("--wandb_project", type=str, default="qat", help="wandb project name")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="wandb run name (auto-generated if not set)")
 
@@ -101,6 +103,7 @@ def main():
         "phases": args.phases,
         "quant_lr": args.quant_lr,
         "weight_lr": args.weight_lr,
+        "ddcl_lambda": args.ddcl_lambda,
         "learning_rate": args.learning_rate,
         "block_ap_epochs": args.epochs,
         "block_ap_batch_size": args.batch_size,
@@ -145,6 +148,7 @@ def main():
             "--group_size", str(args.group_size),
             "--quant_lr", str(args.quant_lr),
             "--weight_lr", str(args.weight_lr),
+            "--ddcl_lambda", str(args.ddcl_lambda),
             "--real_quant",
             "--epochs", str(args.epochs),
             "--batch_size", str(args.batch_size),

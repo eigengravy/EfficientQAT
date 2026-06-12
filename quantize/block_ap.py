@@ -29,6 +29,36 @@ def update_dataset(layer, dataset, dev, attention_mask, position_ids):
                 new_data = layer(inps, attention_mask=attention_mask,position_ids=position_ids)[0].to('cpu')
                 dataset.update_data(index,new_data)
 
+
+def ddcl_regularization_loss(model):
+    total_cost = None
+    total_params = 0
+    for module in model.modules():
+        if isinstance(module, int_linear_fake.QuantLinear):
+            cost = module.weight_quantizer.ddcl_bit_cost(module.weight)
+            num_params = module.weight.numel()
+            weighted_cost = cost * num_params
+            total_cost = weighted_cost if total_cost is None else total_cost + weighted_cost
+            total_params += num_params
+    if total_cost is None:
+        return None
+    return total_cost / total_params
+
+
+def ddcl_saturation_rate(model):
+    total_rate = None
+    total_params = 0
+    for module in model.modules():
+        if isinstance(module, int_linear_fake.QuantLinear):
+            rate = module.weight_quantizer.ddcl_saturation_rate(module.weight)
+            num_params = module.weight.numel()
+            weighted_rate = rate * num_params
+            total_rate = weighted_rate if total_rate is None else total_rate + weighted_rate
+            total_params += num_params
+    if total_rate is None:
+        return None
+    return total_rate / total_params
+
                     
 def block_ap(
     model,
@@ -217,6 +247,8 @@ def block_ap(
             for epoch in range(args.epochs):
                 # step: 6.4 training
                 loss_list = []
+                ddcl_bit_cost_list = []
+                ddcl_loss_list = []
                 norm_list = []
                 start_time = time.time()
                 for index, (quant_inps, fp_inps) in enumerate(zip(quant_train_inps, fp_train_inps)):    
@@ -226,12 +258,23 @@ def block_ap(
                         label = fp_inps.to(dev)
                         quant_out = qlayer(input, attention_mask=attention_mask_batch,position_ids=position_ids)[0]
                         reconstruction_loss = loss_func(label, quant_out)
-                        loss =  reconstruction_loss
+                        ddcl_bit_cost = None
+                        ddcl_loss = None
+                        loss = reconstruction_loss
+                        ddcl_lambda = getattr(args, "ddcl_lambda", 0.0)
+                        if args.scheme == "ddcl" and ddcl_lambda > 0:
+                            ddcl_bit_cost = ddcl_regularization_loss(qlayer)
+                            ddcl_loss = ddcl_lambda * ddcl_bit_cost
+                            loss = loss + ddcl_loss
 
                     if not math.isfinite(loss.item()):
                         logger.info("Loss is NAN, stopping training")
                         pdb.set_trace()
                     loss_list.append(reconstruction_loss.detach().cpu())
+                    if ddcl_bit_cost is not None:
+                        ddcl_bit_cost_list.append(ddcl_bit_cost.detach().cpu())
+                    if ddcl_loss is not None:
+                        ddcl_loss_list.append(ddcl_loss.detach().cpu())
                     optimizer.zero_grad()
                     norm = loss_scaler(loss, optimizer,parameters=trainable_parameters(qlayer)).cpu()
                     norm_list.append(norm.data)
@@ -241,6 +284,9 @@ def block_ap(
                         global_step = (block_index * args.epochs + epoch) * steps_per_epoch + index
                         wandb_run.log({
                             "block_ap/reconstruction_loss": reconstruction_loss.item(),
+                            "block_ap/ddcl_bit_cost": ddcl_bit_cost.item() if ddcl_bit_cost is not None else 0,
+                            "block_ap/ddcl_loss": ddcl_loss.item() if ddcl_loss is not None else 0,
+                            "block_ap/total_loss": loss.item(),
                             "block_ap/grad_norm": norm.item(),
                             "block_ap/block_index": block_index,
                             "block_ap/epoch": epoch,
@@ -271,8 +317,15 @@ def block_ap(
                 train_mean_num = min(len(loss_list),64) # calculate the average training loss of last train_mean_num samples
                 loss_mean = torch.stack(loss_list)[-(train_mean_num-1):].mean()
                 val_loss_mean = torch.stack(val_loss_list).mean()
+                ddcl_bit_cost_mean = torch.stack(ddcl_bit_cost_list).mean() if ddcl_bit_cost_list else torch.tensor(0.0)
+                ddcl_loss_mean = torch.stack(ddcl_loss_list).mean() if ddcl_loss_list else torch.tensor(0.0)
                 norm_mean = torch.stack(norm_list).mean()
-                logger.info(f"blocks {block_index} epoch {epoch} recon_loss:{loss_mean} val_loss:{val_loss_mean} quant_lr:{quant_scheduler.get_lr()[0]} norm:{norm_mean:.8f} max memory_allocated {torch.cuda.max_memory_allocated(dev) / 1024**2} time {time.time()-start_time} ")
+                ddcl_saturation = None
+                if args.scheme == "ddcl":
+                    with torch.no_grad():
+                        ddcl_saturation = ddcl_saturation_rate(qlayer)
+                ddcl_saturation_mean = ddcl_saturation.cpu() if ddcl_saturation is not None else torch.tensor(0.0)
+                logger.info(f"blocks {block_index} epoch {epoch} recon_loss:{loss_mean} val_loss:{val_loss_mean} ddcl_bit_cost:{ddcl_bit_cost_mean} ddcl_loss:{ddcl_loss_mean} ddcl_saturation:{ddcl_saturation_mean} quant_lr:{quant_scheduler.get_lr()[0]} norm:{norm_mean:.8f} max memory_allocated {torch.cuda.max_memory_allocated(dev) / 1024**2} time {time.time()-start_time} ")
 
                 if wandb_run is not None:
                     steps_per_epoch = args.train_size // args.batch_size
@@ -280,6 +333,9 @@ def block_ap(
                     epoch_metrics = {
                         "block_ap/train_loss_mean": loss_mean.item(),
                         "block_ap/val_loss_mean": val_loss_mean.item(),
+                        "block_ap/ddcl_bit_cost_mean": ddcl_bit_cost_mean.item(),
+                        "block_ap/ddcl_loss_mean": ddcl_loss_mean.item(),
+                        "block_ap/ddcl_saturation_mean": ddcl_saturation_mean.item(),
                         "block_ap/grad_norm_mean": norm_mean.item(),
                         "block_ap/quant_lr": quant_scheduler.get_lr()[0] if args.quant_lr > 0 else 0,
                         "block_ap/peak_vram_mb": torch.cuda.max_memory_allocated(dev) / 1024**2,
@@ -317,7 +373,8 @@ def block_ap(
             named_linears = get_named_linears(qlayer, int_linear_fake.QuantLinear)
             for name, module in named_linears.items():
                 scales = module.weight_quantizer.scale.clamp(1e-4,1e4).detach()
-                zeros = module.weight_quantizer.zero_point.detach().cuda().round().cpu()
+                zeros = module.weight_quantizer.zero_point.detach().cuda().round()
+                zeros = zeros.clamp(module.weight_quantizer.qmin, module.weight_quantizer.qmax).cpu()
                 group_size = module.weight_quantizer.group_size
                 dim0 = module.weight.shape[0]
                 scales = scales.view(dim0,-1).transpose(0,1).contiguous()
@@ -340,4 +397,3 @@ def block_ap(
     gc.collect()                    
     model.config.use_cache = use_cache
     return model
-
