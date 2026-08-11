@@ -88,8 +88,8 @@ def main():
     parser.add_argument("--group_size", type=int, default=128, help="weights quantization group size")
     parser.add_argument("--quant_lr", type=float, default=1e-4, help="lr of quantization parameters (s and z)")
     parser.add_argument("--weight_lr", type=float, default=1e-5, help="lr of full-precision weights")
-    parser.add_argument("--ddcl_lambda", type=float, default=1e-4,
-                        help="Weight for DDCL-style differentiable bit-cost regularizer during Block-AP. Only applied with --scheme ddcl.")
+    parser.add_argument("--ddcl_lambda", type=float, default=1e-5,
+                        help="Weight for the bounded DDCL differentiable rate surrogate during Block-AP. Only applied with --scheme ddcl.")
     parser.add_argument("--min_lr_factor", type=float, default=20, help="min_lr = lr/min_lr_factor")
     parser.add_argument("--clip_grad", type=float, default=0.3)
     parser.add_argument("--wd", type=float, default=0,help="weight decay")
@@ -102,7 +102,7 @@ def main():
     parser.add_argument("--wandb_run_id", type=str, default=None, help="wandb run ID to resume (passed by train.py)")
     parser.add_argument("--scheme", type=str, default="uniform_affine",
                         choices=["uniform_affine", "ddcl"],
-                        help="Quantizer scheme: 'uniform_affine' (deterministic STE) or 'ddcl' (subtractive dither + bit-cost regularization)")
+                        help="Quantizer scheme: 'uniform_affine' (EfficientQAT) or 'ddcl' (bounded subtractive dither + rate regularization)")
 
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
     args = parser.parse_args()
@@ -136,7 +136,7 @@ def main():
     else:
         # load fp quantized model
         config = AutoConfig.from_pretrained(args.model)
-        tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=False,legacy=False)
+        tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
         model = AutoModelForCausalLM.from_pretrained(args.model, config=config, device_map='cpu',torch_dtype=torch.float16)
         for param in model.parameters():
             param.requires_grad = False

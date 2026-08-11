@@ -25,28 +25,28 @@ class MultiBlock(nn.Module):
 def set_weight_parameters(model, requires_grad):
     params = []
     for n, m in model.named_parameters():
-        if n.find('weight') > -1 and not (n.find('scale') > -1 or n.find('zero_point') > -1):
+        if n.endswith('weight') and '.weight_quantizer.' not in n:
             m.requires_grad = requires_grad
     return iter(params)
 
 def weight_parameters(model):
     params = []
     for n, m in model.named_parameters():
-        if n.find('weight') > -1 and not (n.find('scale') > -1 or n.find('zero_point') > -1):
+        if n.endswith('weight') and '.weight_quantizer.' not in n:
             params.append(m)
     return iter(params)
 
 def set_quant_parameters(model, requires_grad):
     params = []
     for n, m in model.named_parameters():
-        if n.find('scale') > -1 or n.find('zero_point') > -1:
+        if '.weight_quantizer.' in n:
             m.requires_grad = requires_grad
     return iter(params)  
 
 def quant_parameters(model):
     params = []
     for n, m in model.named_parameters():
-        if n.find('scale') > -1 or n.find('zero_point') > -1:
+        if '.weight_quantizer.' in n:
             params.append(m)
     return iter(params)  
 
@@ -76,6 +76,7 @@ def quant_inplace(model):
     for name, module in model.named_modules():
         if isinstance(module, QuantLinear):
             module.weight.data = module.weight_quantizer(module.weight.data)
+            module.weight_is_latent = False
 
 
 class TruncateFunction(torch.autograd.Function):
@@ -125,4 +126,4 @@ def set_op_by_name(layer, name, new_module):
 #                 mod_ = getattr(mod_, levels[l_idx])
 #         setattr(mod_, levels[-1], added_module)
 #     else:
-#         setattr(original_module, name, added_module)   
+#         setattr(original_module, name, added_module)

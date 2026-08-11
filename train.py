@@ -50,18 +50,20 @@ def main():
                         help="Stream Block-AP hidden-state caches to disk instead of RAM (avoids RAM OOM on low-memory machines)")
     parser.add_argument("--pt_context_len", type=int, default=4096, help="Context length for E2E-QP")
     parser.add_argument("--num_train_epochs", type=int, default=1, help="Epochs for E2E-QP")
+    parser.add_argument("--e2e_train_size", type=int, default=4096, help="Number of E2E-QP training samples")
+    parser.add_argument("--e2e_val_size", type=int, default=64, help="Number of E2E-QP validation samples")
 
     # Learning rates
     parser.add_argument("--quant_lr", type=float, default=1e-4, help="LR for quantization params (Block-AP)")
     parser.add_argument("--weight_lr", type=float, default=1e-5, help="LR for weights (Block-AP)")
-    parser.add_argument("--ddcl_lambda", type=float, default=1e-4,
-                        help="Weight for DDCL-style bit-cost regularizer during Block-AP. Only applied with --scheme ddcl.")
+    parser.add_argument("--ddcl_lambda", type=float, default=1e-5,
+                        help="Weight for the bounded DDCL rate surrogate during Block-AP. Only applied with --scheme ddcl.")
     parser.add_argument("--learning_rate", type=float, default=1e-5, help="LR for E2E-QP")
 
     # Experiment
     parser.add_argument("--scheme", type=str, default="uniform_affine",
                         choices=["uniform_affine", "ddcl"],
-                        help="Quantizer scheme: 'uniform_affine' (deterministic STE) or 'ddcl' (subtractive dither + bit-cost regularization)")
+                        help="Block-AP scheme: standard EfficientQAT affine quantization or bounded DDCL")
     parser.add_argument("--wandb_project", type=str, default="qat", help="wandb project name")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="wandb run name (auto-generated if not set)")
 
@@ -72,6 +74,8 @@ def main():
 
     # Paths
     parser.add_argument("--output_dir", type=str, default="./output", help="Base output directory")
+    parser.add_argument("--block_ap_model_path", type=str, default=None,
+                        help="Explicit Block-AP checkpoint for an E2E-QP-only run")
     parser.add_argument("--seed", type=int, default=2, help="Random seed")
 
     args = parser.parse_args()
@@ -91,7 +95,10 @@ def main():
 
     # Create a single wandb run for the entire experiment
     quant_config = f"w{args.wbits}g{args.group_size}"
-    run_name = args.wandb_run_name or f"{args.scheme}-{args.net}-{quant_config}"
+    default_run_name = f"{args.scheme}-{args.net}-{quant_config}-seed-{args.seed}"
+    if args.scheme == "ddcl":
+        default_run_name = f"ddcl-lambda-{args.ddcl_lambda:g}-{args.net}-{quant_config}-seed-{args.seed}"
+    run_name = args.wandb_run_name or default_run_name
 
     config = {
         "scheme": args.scheme,
@@ -111,10 +118,14 @@ def main():
         "e2e_batch_size": args.e2e_batch_size,
         "e2e_context_len": args.pt_context_len,
         "e2e_epochs": args.num_train_epochs,
+        "e2e_train_size": args.e2e_train_size,
+        "e2e_val_size": args.e2e_val_size,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "seed": args.seed,
     }
-    tags = [args.scheme, args.net, quant_config, args.dataset]
+    tags = [args.scheme, args.net, quant_config, args.dataset, f"seed-{args.seed}"]
+    if args.scheme == "ddcl":
+        tags.append(f"lambda-{args.ddcl_lambda:g}")
 
     run = wandb.init(
         project=args.wandb_project,
@@ -129,10 +140,29 @@ def main():
 
     phases = [p.strip() for p in args.phases.split(",")]
 
-    # Paths for intermediate artifacts
-    block_ap_output = os.path.join(args.output_dir, "block_ap_log", f"{args.net}-{quant_config}")
-    block_ap_model = os.path.join(args.output_dir, "block_ap_models", f"{args.net}-{quant_config}")
-    e2e_output = os.path.join(args.output_dir, "e2e_qp_models", f"{args.net}-{quant_config}-{args.dataset}")
+    # Keep every experimental condition isolated so baseline and DDCL artifacts
+    # can never overwrite or silently consume one another.
+    condition = args.scheme
+    if args.scheme == "ddcl":
+        condition = os.path.join(condition, f"lambda-{args.ddcl_lambda:g}")
+    experiment_dir = os.path.join(
+        args.output_dir,
+        args.net,
+        condition,
+        quant_config,
+        f"seed-{args.seed}",
+    )
+    block_ap_output = os.path.join(experiment_dir, "block_ap_log")
+    derived_block_ap_model = os.path.join(experiment_dir, "block_ap_model")
+    block_ap_model = args.block_ap_model_path or derived_block_ap_model
+    e2e_output = os.path.join(experiment_dir, f"e2e_qp_{args.dataset}")
+
+    if "block_ap" in phases and args.block_ap_model_path:
+        print("ERROR: --block_ap_model_path is only valid when reusing a checkpoint for an E2E-QP-only run.")
+        sys.exit(1)
+    if "e2e_qp" in phases and "block_ap" not in phases and not args.block_ap_model_path:
+        print("ERROR: E2E-QP-only runs require --block_ap_model_path to avoid selecting an ambiguous checkpoint.")
+        sys.exit(1)
 
     if "block_ap" in phases:
         print(f"\n{'='*60}")
@@ -203,9 +233,9 @@ def main():
             "--training_strategy", "epochs",
             "--evaluation_strategy", "steps",
             "--eval_steps", "64",
-            "--max_train_samples", "4096",
+            "--max_train_samples", str(args.e2e_train_size),
             "--num_train_epochs", str(args.num_train_epochs),
-            "--eval_dataset_size", "64",
+            "--eval_dataset_size", str(args.e2e_val_size),
             "--bf16",
             "--data_seed", str(args.seed),
             "--max_grad_norm", "0.3",

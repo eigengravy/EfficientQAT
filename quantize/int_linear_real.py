@@ -112,12 +112,11 @@ class QuantLinear(nn.Module, TritonModuleMixin):
 
         intweight = []
         for idx in range(self.infeatures):
-            intweight.append(
-                torch.round(
-                    (
-                        W[:, idx] + scale_zeros[g_idx[idx]]) / self.scales[g_idx[idx]]
-                ).to(torch.int)[:, None]
+            packed_column = torch.round(
+                (W[:, idx] + scale_zeros[g_idx[idx]]) / self.scales[g_idx[idx]]
             )
+            packed_column = packed_column.clamp(0, self.maxq).to(torch.int)
+            intweight.append(packed_column[:, None])
         intweight = torch.cat(intweight, dim=1)
         intweight = intweight.t().contiguous()
         intweight = intweight.numpy().astype(np.uint32)
@@ -175,7 +174,7 @@ def load_quantized_model(model_path, wbits, group_size):
     print(f"Loading quantized model from {model_path}")
 
     # import pdb;pdb.set_trace()
-    tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
     config = AutoConfig.from_pretrained(model_path)
     with init_empty_weights():
         model = AutoModelForCausalLM.from_config(config=config,torch_dtype=torch.float16, trust_remote_code=True)

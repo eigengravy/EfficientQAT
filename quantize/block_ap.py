@@ -45,12 +45,12 @@ def ddcl_regularization_loss(model):
     return total_cost / total_params
 
 
-def ddcl_saturation_rate(model):
+def ddcl_code_range_violation(model):
     total_rate = None
     total_params = 0
     for module in model.modules():
         if isinstance(module, int_linear_fake.QuantLinear):
-            rate = module.weight_quantizer.ddcl_saturation_rate(module.weight)
+            rate = module.weight_quantizer.code_range_violation(module.weight)
             num_params = module.weight.numel()
             weighted_rate = rate * num_params
             total_rate = weighted_rate if total_rate is None else total_rate + weighted_rate
@@ -58,6 +58,21 @@ def ddcl_saturation_rate(model):
     if total_rate is None:
         return None
     return total_rate / total_params
+
+
+def ddcl_rho_utilization(model):
+    total = None
+    groups = 0
+    for module in model.modules():
+        if isinstance(module, int_linear_fake.QuantLinear):
+            utilization = module.weight_quantizer.rho_utilization()
+            group_count = module.weight_quantizer.raw_rho.numel()
+            weighted = utilization * group_count
+            total = weighted if total is None else total + weighted
+            groups += group_count
+    if total is None:
+        return None
+    return total / groups
 
                     
 def block_ap(
@@ -243,6 +258,7 @@ def block_ap(
             print(f"trainable parameter number: {trainable_number/1e6}M")
 
             best_val_loss = 1e6
+            best_state_dict = None
             early_stop_flag = 0
             for epoch in range(args.epochs):
                 # step: 6.4 training
@@ -320,12 +336,16 @@ def block_ap(
                 ddcl_bit_cost_mean = torch.stack(ddcl_bit_cost_list).mean() if ddcl_bit_cost_list else torch.tensor(0.0)
                 ddcl_loss_mean = torch.stack(ddcl_loss_list).mean() if ddcl_loss_list else torch.tensor(0.0)
                 norm_mean = torch.stack(norm_list).mean()
-                ddcl_saturation = None
+                ddcl_range_violation = None
+                ddcl_rho = None
                 if args.scheme == "ddcl":
                     with torch.no_grad():
-                        ddcl_saturation = ddcl_saturation_rate(qlayer)
-                ddcl_saturation_mean = ddcl_saturation.cpu() if ddcl_saturation is not None else torch.tensor(0.0)
-                logger.info(f"blocks {block_index} epoch {epoch} recon_loss:{loss_mean} val_loss:{val_loss_mean} ddcl_bit_cost:{ddcl_bit_cost_mean} ddcl_loss:{ddcl_loss_mean} ddcl_saturation:{ddcl_saturation_mean} quant_lr:{quant_scheduler.get_lr()[0]} norm:{norm_mean:.8f} max memory_allocated {torch.cuda.max_memory_allocated(dev) / 1024**2} time {time.time()-start_time} ")
+                        ddcl_range_violation = ddcl_code_range_violation(qlayer)
+                        ddcl_rho = ddcl_rho_utilization(qlayer)
+                ddcl_range_violation_mean = ddcl_range_violation.cpu() if ddcl_range_violation is not None else torch.tensor(0.0)
+                ddcl_rho_mean = ddcl_rho.cpu() if ddcl_rho is not None else torch.tensor(0.0)
+                current_quant_lr = quant_scheduler.get_last_lr()[0] if args.quant_lr > 0 else 0
+                logger.info(f"blocks {block_index} epoch {epoch} recon_loss:{loss_mean} val_loss:{val_loss_mean} ddcl_bit_cost:{ddcl_bit_cost_mean} ddcl_loss:{ddcl_loss_mean} ddcl_code_range_violation:{ddcl_range_violation_mean} ddcl_rho_utilization:{ddcl_rho_mean} quant_lr:{current_quant_lr} norm:{norm_mean:.8f} max memory_allocated {torch.cuda.max_memory_allocated(dev) / 1024**2} time {time.time()-start_time} ")
 
                 if wandb_run is not None:
                     steps_per_epoch = args.train_size // args.batch_size
@@ -335,9 +355,10 @@ def block_ap(
                         "block_ap/val_loss_mean": val_loss_mean.item(),
                         "block_ap/ddcl_bit_cost_mean": ddcl_bit_cost_mean.item(),
                         "block_ap/ddcl_loss_mean": ddcl_loss_mean.item(),
-                        "block_ap/ddcl_saturation_mean": ddcl_saturation_mean.item(),
+                        "block_ap/ddcl_code_range_violation_mean": ddcl_range_violation_mean.item(),
+                        "block_ap/ddcl_rho_utilization_mean": ddcl_rho_mean.item(),
                         "block_ap/grad_norm_mean": norm_mean.item(),
-                        "block_ap/quant_lr": quant_scheduler.get_lr()[0] if args.quant_lr > 0 else 0,
+                        "block_ap/quant_lr": current_quant_lr,
                         "block_ap/peak_vram_mb": torch.cuda.max_memory_allocated(dev) / 1024**2,
                         "block_ap/epoch_time_s": time.time() - start_time,
                         "block_ap/block_index": block_index,
@@ -347,14 +368,22 @@ def block_ap(
                         epoch_metrics["block_ap/weight_lr"] = weight_scheduler.get_lr()[0]
                     wandb_run.log(epoch_metrics, step=epoch_step)
 
-                if val_loss_mean < best_val_loss:
-                    best_val_loss = val_loss_mean
+                if val_loss_mean.item() < best_val_loss:
+                    best_val_loss = val_loss_mean.item()
+                    best_state_dict = {
+                        name: value.detach().cpu().clone()
+                        for name, value in qlayer.state_dict().items()
+                    }
+                    early_stop_flag = 0
                 else:
                     early_stop_flag += 1
                     if args.early_stop > 0 and early_stop_flag >=args.early_stop:
                         break
             optimizer.zero_grad()
             del optimizer
+            if best_state_dict is not None:
+                qlayer.load_state_dict(best_state_dict)
+                del best_state_dict
 
         # step 6.6: directly replace the weight with fake quantization
         qlayer.eval()

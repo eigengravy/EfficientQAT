@@ -187,7 +187,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     )
     scheme: str = field(
         default="uniform_affine",
-        metadata={"help": "Quantizer scheme: 'uniform_affine' (deterministic STE) or 'ddcl' (subtractive dither + bit-cost regularization in Block-AP)."}
+        metadata={"help": "Block-AP provenance: standard EfficientQAT or bounded DDCL. E2E-QP is identical for both."}
     )
     output_dir: str = field(default='./output', metadata={"help": 'The output dir for logs and checkpoints'})
     resume_from_checkpoint: str = field(default=None, metadata={"help": 'The output dir for logs and checkpoints'})

@@ -17,7 +17,7 @@ class QuantLinear(nn.Module):
         org_module: nn.Linear,
         wbits=4,
         group_size=64,
-        scheme="uniform",
+        scheme="uniform_affine",
     ):
         super().__init__()
         self.fwd_kwargs = dict()
@@ -33,6 +33,10 @@ class QuantLinear(nn.Module):
         self.use_weight_quant = False
         # initialize quantizer
         self.weight_quantizer = get_quantizer(scheme, wbits, group_size, weight=org_module.weight)
+        self.weight_is_latent = scheme == "ddcl"
+        if self.weight_is_latent:
+            with torch.no_grad():
+                self.weight.copy_(self.weight_quantizer.initial_latent(self.weight))
         self.use_temporary_parameter = False
 
     
@@ -42,7 +46,11 @@ class QuantLinear(nn.Module):
             weight = self.weight_quantizer(self.weight)
             bias = self.bias
         else:
-            weight = self.weight
+            weight = (
+                self.weight_quantizer.bounded_weight(self.weight)
+                if self.weight_is_latent
+                else self.weight
+            )
             bias = self.bias
 
         
@@ -53,7 +61,5 @@ class QuantLinear(nn.Module):
 
     def set_quant_state(self, weight_quant: bool = False):
         self.use_weight_quant = weight_quant
-
-
 
 

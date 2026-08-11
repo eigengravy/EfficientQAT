@@ -89,6 +89,9 @@ Mistral-Large-Instruct-2407|w2g64|5.58|73.54|35.5|[GPTQ](https://huggingface.co/
 ## Training
 EfficientQAT involves two consecutive training phases: Block-wise training of all parameters (**Block-AP**) and end-to-end training of quantization parameters (**E2E-QP**). The detailed training script can be found in `./examples`. We give the training script examples on Llama-2-7B with w2g64 quantization in the following. 
 
+For the Llama 3.2 1B comparison between standard EfficientQAT and bounded DDCL,
+see [`LLAMA32_1B_EXPERIMENT.md`](./LLAMA32_1B_EXPERIMENT.md).
+
 1. Block-AP
 
 You should modify `--model` to the folder of full-precision model  in the script before you running the following command.

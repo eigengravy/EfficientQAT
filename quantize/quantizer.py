@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 
 import pdb
@@ -32,8 +33,10 @@ def round_dithered_ste(x: torch.Tensor):
 def clamp_ste(x: torch.Tensor, min, max):
     return (x.clamp(min,max) - x).detach() + x
 
-def clamp_ste(x: torch.Tensor, min, max):
-    return (x.clamp(min,max) - x).detach() + x
+
+def _inverse_softplus(x: torch.Tensor):
+    """Numerically stable inverse of softplus for positive initializers."""
+    return x + torch.log(-torch.expm1(-x))
 
 
 class UniformAffineQuantizer(nn.Module):
@@ -89,37 +92,6 @@ class UniformAffineQuantizer(nn.Module):
             x_dequant = x_dequant.reshape(dim1, dim2)
         return x_dequant
 
-    def ddcl_bit_cost(self, x):
-        """Differentiable DDCL-style code-length upper bound per weight.
-
-        This is not used by the baseline quantizer unless the training loop adds
-        it to the loss. The bound follows log2(2 * |z| / delta + 1), with the
-        learned quantizer scale acting as delta.
-        """
-        delta = clamp_ste(self.scale, 1e-4, 1e4)
-        x = x.reshape(-1, self.group_size)
-        normalized_magnitude = (x / delta).abs()
-        return torch.log1p(2.0 * normalized_magnitude).div(math.log(2.0)).mean()
-
-    def ddcl_saturation_rate(self, x):
-        """Expected fixed-range overflow rate under subtractive dither.
-
-        DDCL training can use an unclamped integer channel, but the final model
-        is still projected into [qmin, qmax]. This metric estimates the
-        probability that round(x / scale + eps) + zero_point would fall outside
-        that fixed range for eps ~ U(-0.5, 0.5).
-        """
-        delta = clamp_ste(self.scale, 1e-4, 1e4)
-        round_zero_point = clamp_ste(round_ste(self.zero_point), self.qmin, self.qmax)
-        x = x.reshape(-1, self.group_size)
-        normalized = x / delta
-        lower = self.qmin - round_zero_point
-        upper = self.qmax - round_zero_point
-        lower_overflow = (lower - normalized).clamp(min=0.0, max=1.0)
-        upper_overflow = (normalized - upper).clamp(min=0.0, max=1.0)
-        return (lower_overflow + upper_overflow).mean()
-
-
     def forward(self, x: torch.Tensor):
         if self.n_bits >= 16 or not self.enable:
             return x
@@ -128,39 +100,128 @@ class UniformAffineQuantizer(nn.Module):
         return x_dequant
 
 
-class DDCLQuantizer(UniformAffineQuantizer):
-    """DDCL-inspired quantizer.
+class DDCLQuantizer(nn.Module):
+    """Bounded DDCL channel that remains exactly packable as fixed-width INT.
 
-    Training uses subtractive-dither fake quantization plus an optional bit-cost
-    term added by the Block-AP loop. Eval/final packing still uses deterministic
-    rounding so the saved model remains compatible with fixed-width kernels.
+    Each group stores an unconstrained latent ``h`` in the parent QuantLinear's
+    weight parameter.  It is mapped to a bounded weight using
+
+        z = alpha * tanh(h) - delta / 2
+
+    where ``rho = alpha / delta`` is learned but constrained to
+    ``rho <= 2**(bits-1) - 0.5``.  The half-step shift makes the bounded interval
+    match the asymmetric signed codes ``[-2**(b-1), 2**(b-1)-1]`` used by the
+    existing integer-zero-point backend.
+
+    Training uses subtractive dither and the DDCL identity-through-detach path.
+    Evaluation uses the same grid with zero dither.  The range construction
+    guarantees that every code fits the final fixed-bit representation; clamps
+    remain only as numerical guards.
     """
 
-    def fake_quant(self, x):
-        scale = clamp_ste(self.scale, 1e-4, 1e4)
-        round_zero_point = clamp_ste(round_ste(self.zero_point), self.qmin, self.qmax)
+    def __init__(self, n_bits=8, group_size=None, weight=None):
+        nn.Module.__init__(self)
+        assert weight is not None, "DDCL initialization requires pretrained weights"
+        assert 2 <= n_bits <= 16, "bitwidth not supported"
+        self.n_bits = n_bits
+        self.qmin = 0
+        self.qmax = 2 ** n_bits - 1
+        self.group_size = group_size if group_size != -1 else weight.shape[-1]
+        assert weight.shape[-1] % self.group_size == 0
+        self.enable = True
 
-        dim1, dim2 = x.shape
-        x = x.reshape(-1, self.group_size)
+        self.signed_qmin = -(2 ** (n_bits - 1))
+        self.signed_qmax = 2 ** (n_bits - 1) - 1
+        self.rho_max = 2 ** (n_bits - 1) - 0.5
+        self._rho_init_fraction = 0.95
+        self._latent_margin = 0.95
+
+        grouped = weight.detach().float().reshape(-1, self.group_size)
+        rho_init = self.rho_max * self._rho_init_fraction
+        center_fraction = 0.5 / rho_init
+        group_max = grouped.amax(dim=-1, keepdim=True)
+        group_min = grouped.amin(dim=-1, keepdim=True)
+        positive_denom = max(self._latent_margin - center_fraction, 1e-3)
+        negative_denom = max(self._latent_margin + center_fraction, 1e-3)
+        alpha = torch.maximum(
+            group_max.clamp_min(0.0) / positive_denom,
+            (-group_min).clamp_min(0.0) / negative_denom,
+        ).clamp_min(CLIPMIN)
+
+        self.raw_alpha = nn.Parameter(_inverse_softplus(alpha).to(weight.dtype))
+        rho_logit = math.log(self._rho_init_fraction / (1.0 - self._rho_init_fraction))
+        self.raw_rho = nn.Parameter(torch.full_like(alpha, rho_logit).to(weight.dtype))
+        self.register_buffer(
+            "zero_point",
+            torch.full_like(alpha, 2 ** (n_bits - 1)).to(weight.dtype),
+        )
+
+    @property
+    def alpha(self):
+        return F.softplus(self.raw_alpha).clamp(min=CLIPMIN, max=1e4)
+
+    @property
+    def rho(self):
+        return self.rho_max * torch.sigmoid(self.raw_rho)
+
+    @property
+    def scale(self):
+        return (self.alpha / self.rho.clamp_min(1e-6)).clamp(min=CLIPMIN, max=1e4)
+
+    def initial_latent(self, weight):
+        """Return h such that bounded_weight(h) reconstructs ``weight``."""
+        grouped = weight.detach().float().reshape(-1, self.group_size)
+        normalized = (grouped + 0.5 * self.scale) / self.alpha
+        normalized = normalized.clamp(-self._latent_margin, self._latent_margin)
+        return torch.atanh(normalized).reshape_as(weight).to(weight.dtype)
+
+    def bounded_weight(self, latent):
+        dim1, dim2 = latent.shape
+        grouped = latent.reshape(-1, self.group_size)
+        bounded = self.alpha * torch.tanh(grouped) - 0.5 * self.scale
+        return bounded.reshape(dim1, dim2)
+
+    def _normalized_code(self, latent, dither):
+        z = self.bounded_weight(latent).reshape(-1, self.group_size)
+        normalized = z / self.scale
+        signed_code = round_ste(normalized + dither)
+        # The alpha/rho parameterization already guarantees these bounds.  This
+        # clamp protects only against finite-precision boundary roundoff.
+        signed_code = signed_code.clamp(self.signed_qmin, self.signed_qmax)
+        return z, signed_code
+
+    def fake_quant(self, latent):
+        dim1, dim2 = latent.shape
         if self.training:
-            eps = torch.rand_like(x) - 0.5
-            x_int = round_ste(x / scale + eps)
+            dither = torch.rand_like(latent.reshape(-1, self.group_size)) - 0.5
         else:
-            eps = None
-            x_int = round_ste(x / scale)
-        if round_zero_point is not None:
-            x_int = x_int.add(round_zero_point)
-        if not self.training:
-            x_int = x_int.clamp(self.qmin, self.qmax)
-        x_dequant = x_int
-        if round_zero_point is not None:
-            x_dequant = x_dequant.sub(round_zero_point)
-        if eps is not None:
-            x_dequant = x_dequant.sub(eps)
-        x_dequant = x_dequant.mul(scale)
-        if self.group_size:
-            x_dequant = x_dequant.reshape(dim1, dim2)
-        return x_dequant
+            dither = torch.zeros_like(latent.reshape(-1, self.group_size))
+
+        z, signed_code = self._normalized_code(latent, dither)
+        z_hat = self.scale * (signed_code - dither)
+        z_approx = z + (z_hat - z).detach()
+        return z_approx.reshape(dim1, dim2)
+
+    def ddcl_bit_cost(self, latent):
+        """DDCL differentiable rate surrogate log2(|z| / delta + 1)."""
+        z = self.bounded_weight(latent).reshape(-1, self.group_size)
+        return torch.log1p((z / self.scale).abs()).div(math.log(2.0)).mean()
+
+    def code_range_violation(self, latent):
+        """Fraction of codes outside the packable range before the safety clamp."""
+        z = self.bounded_weight(latent).reshape(-1, self.group_size)
+        raw_code = torch.round(z / self.scale)
+        invalid = (raw_code < self.signed_qmin) | (raw_code > self.signed_qmax)
+        return invalid.float().mean()
+
+    def rho_utilization(self):
+        """Mean fraction of the available fixed-bit code radius in use."""
+        return (self.rho / self.rho_max).mean()
+
+    def forward(self, latent):
+        if self.n_bits >= 16 or not self.enable:
+            return self.bounded_weight(latent)
+        return self.fake_quant(latent)
 
 
 def get_quantizer(scheme: str, n_bits=8, group_size=None, weight=None):
